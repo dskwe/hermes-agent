@@ -6,7 +6,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Union, Optional
 from urllib.parse import urlparse
 
 import yaml
@@ -142,7 +142,7 @@ def atomic_yaml_write(
     *,
     default_flow_style: bool = False,
     sort_keys: bool = False,
-    extra_content: str | None = None,
+    extra_content: Optional[str] = None,
 ) -> None:
     """Write YAML data to a file atomically.
 
@@ -232,7 +232,7 @@ _PROXY_ENV_KEYS = (
 )
 
 
-def normalize_proxy_url(proxy_url: str | None) -> str | None:
+def normalize_proxy_url(proxy_url: Optional[str]) -> Optional[str]:
     """Normalize proxy URLs for httpx/aiohttp compatibility.
 
     WSL/Clash-style environments often export SOCKS proxies as
