@@ -257,7 +257,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     table.add_row("Token env var",   token_env)
     table.add_row("Token in env",    _yn(token_set))
     table.add_row("Project ID",      project_id or "[dim](unset)[/dim]")
-    table.add_row("Override existing", _yn(bool(bw_cfg.get("override_existing", False))))
+    table.add_row("Override existing", _yn(bool(bw_cfg.get("override_existing", True))))
     table.add_row("Cache TTL (s)",   str(bw_cfg.get("cache_ttl_seconds", 300)))
     table.add_row("Auto-install",    _yn(bool(bw_cfg.get("auto_install", True))))
 
@@ -320,7 +320,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         console.print("[yellow]No secrets in project.[/yellow]")
         return 0
 
-    override = bool(bw_cfg.get("override_existing", False)) or args.apply
+    override = bool(bw_cfg.get("override_existing", True)) or args.apply
     table = Table(show_header=True, header_style="bold")
     table.add_column("Name", style="cyan")
     table.add_column("Action")
