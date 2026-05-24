@@ -229,6 +229,30 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
             )
 
 
+def _ensure_final_response_in_messages(messages: list, final_response) -> None:
+    """Inject final_response into messages if it's a non-empty assistant reply
+    that isn't already represented by the tail message.
+
+    Several exit paths (partial_stream_recovery, fallback_prior_turn_content,
+    max_iterations) set final_response but break without appending a structured
+    assistant message dict.  The normal text_response path already appended at
+    ~L3833; skip re-injection when the tail already matches.
+    """
+    if (
+        final_response
+        and isinstance(final_response, str)
+        and final_response.strip()
+        and final_response != "(empty)"
+    ):
+        _tail = messages[-1] if messages else None
+        if not (
+            isinstance(_tail, dict)
+            and _tail.get("role") == "assistant"
+            and _tail.get("content") == final_response
+        ):
+            messages.append({"role": "assistant", "content": final_response})
+
+
 def run_conversation(
     agent,
     user_message: str,
@@ -3960,6 +3984,9 @@ def run_conversation(
     # can replay assistant("(empty)") / recovery nudges and fall into the
     # same empty-response loop again.
     agent._drop_trailing_empty_response_scaffolding(messages)
+
+    _ensure_final_response_in_messages(messages, final_response)
+
     agent._persist_session(messages, conversation_history)
 
     # ── Turn-exit diagnostic log ─────────────────────────────────────
