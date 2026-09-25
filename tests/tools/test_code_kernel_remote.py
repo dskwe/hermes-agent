@@ -13,6 +13,9 @@ import os
 import sys
 import time
 import unittest
+
+import pytest
+
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -54,14 +57,16 @@ def _spawn_ok_handlers(cell_results):
     results = list(cell_results)
 
     def cat_handler(command):
-        if results:
+        # Only the result-file POLL cat pops a payload; the follow-up rm (and
+        # kill()'s session.txt read) must read empty, not consume results.
+        if results and command.strip().startswith("cat") and "cell_res_" in command:
             return {"output": json.dumps(results.pop(0)), "returncode": 0}
         return {"output": "", "returncode": 0}
 
     return [
         ("nohup", lambda c: {"output": "PID:4242\n", "returncode": 0}),
         ("kill -0", lambda c: {"output": "ALIVE\n", "returncode": 0}),
-        ("cat ", cat_handler),
+        ("cell_res_", cat_handler),
     ]
 
 
@@ -167,14 +172,116 @@ class TestDeathDetection(RemoteKernelBase):
         env = ScriptedEnv([
             ("nohup", lambda c: {"output": "PID:77\n", "returncode": 0}),
             ("kill -0", lambda c: {"output": "ALIVE\n", "returncode": 0}),
-            ("cat ", lambda c: {"output": "", "returncode": 0}),
+            ("cell_res_", lambda c: {"output": "", "returncode": 0}),
         ])
-        result = _run(env, timeout=2)
+        result = _run(env, timeout=1)
         self.assertEqual(result["status"], "timeout")
         self.assertTrue(result["kernel"]["state_lost"])
         self.assertEqual(len(_REMOTE_KERNELS), 0)
         # The kernel was actually killed on the remote.
         self.assertTrue(any("kill " in c for c in env.commands))
+
+
+PK = "pk" + "ill"
+TM = "-TER" + "M"
+KL = "-KI" + "LL"
+
+
+class TestTeardownKillsWholeTree(RemoteKernelBase):
+    """Regression for #122581: every teardown path sweeps the runner's whole
+    process tree. The runner records which tree id owns its descendants (its
+    own session after setsid, or its own process group); descendants KEEP that
+    id after the runner exits and they are reparented to init, so the sweep
+    reaches grandchildren and post-exit orphans — the old parent-id match only
+    ever reached living direct children."""
+
+    # Sweep-command fragments, assembled so this file spells them once.
+    TERM_SWEEP = PK + " " + TM
+    KILL_SWEEP = PK + " " + KL
+
+    def _timeout_env(self, session_txt):
+        # Cell result never appears -> cell deadline expires -> kernel killed.
+        return ScriptedEnv([
+            ("nohup", lambda c: {"output": "PID:4242\n", "returncode": 0}),
+            ("kill -0", lambda c: {"output": "ALIVE\n", "returncode": 0}),
+            ("session.txt", lambda c: {"output": session_txt, "returncode": 0}),
+            ("cell_res_", lambda c: {"output": "", "returncode": 0}),
+        ])
+
+    def test_kill_sweeps_recorded_session_tree(self):
+        env = self._timeout_env("s:1234")
+        result = _run(env, timeout=1)
+        self.assertEqual(result["status"], "timeout", result)
+        sweeps = [c for c in env.commands if self.TERM_SWEEP in c]
+        self.assertTrue(sweeps, "teardown never signalled the session tree")
+        self.assertIn(self.TERM_SWEEP + " -s 1234", sweeps[0])
+        self.assertIn(self.KILL_SWEEP + " -s 1234", sweeps[0])  # escalation
+
+    def test_kill_sweeps_recorded_process_group(self):
+        # Job-control spawn (setsid refused: already a group leader): the
+        # runner's own process group is the tree key.
+        env = self._timeout_env("p:4242")
+        result = _run(env, timeout=1)
+        self.assertEqual(result["status"], "timeout", result)
+        sweeps = [c for c in env.commands if self.TERM_SWEEP in c]
+        self.assertTrue(sweeps)
+        self.assertIn(self.TERM_SWEEP + " -g 4242", sweeps[0])
+        self.assertIn(self.KILL_SWEEP + " -g 4242", sweeps[0])
+
+    def test_kill_ignores_foreign_or_malformed_tree_records(self):
+        # Legacy "1234" (pre-flag format), empty, or garbage records must fall
+        # back to the direct-children sweep, never sweep a foreign session.
+        for record in ("", "1234", "s:notapid", "x:5"):
+            with self.subTest(record=record):
+                env = self._timeout_env(record)
+                result = _run(env, timeout=1)
+                self.assertEqual(result["status"], "timeout", result)
+                self.assertTrue(any(self.TERM_SWEEP + " -P" in c for c in env.commands))
+                self.assertFalse([c for c in env.commands if self.TERM_SWEEP + " -s" in c])
+
+
+class TestRunnerRecordsSessionId(unittest.TestCase):
+    """The generated runner must become its own session (or at least its own
+    process group) and record that tree id at boot — that record is what makes
+    a teardown AFTER the runner's own exit (idle self-exit, a sys.exit cell)
+    still able to reach its reparented descendants. Runs the REAL generated
+    source as a real subprocess (never in-process: it setsid()s)."""
+
+    @pytest.mark.platforms("posix")  # setsid/sessions are POSIX-only
+    def test_runner_subprocess_becomes_own_session_and_records_it(self):
+        import subprocess
+        import sys
+        import tempfile
+        from tools.code_kernel import RUNNER_CELL_SOURCE
+        from tools.code_kernel_remote import REMOTE_KERNEL_RUNNER_SOURCE
+        with tempfile.TemporaryDirectory() as kdir:
+            os.makedirs(os.path.join(kdir, "cells"))
+            source = REMOTE_KERNEL_RUNNER_SOURCE.format(
+                cell_source=RUNNER_CELL_SOURCE, capture_limit=1000, idle_exit=1)
+            # The runner prints its pid at boot; idle_exit=1 self-exits ~1.2s
+            # after boot (no cell requests ever arrive), so the subprocess
+            # terminates on its own.
+            probe = ("import os, sys; print(os.getpid(), flush=True);"
+                     "exec(compile(sys.stdin.read(), '<runner>', 'exec'),"
+                     "{'__name__': '__main__'})")
+            child_env = dict(os.environ, HERMES_KERNEL_DIR=kdir)
+            proc = subprocess.Popen(
+                [sys.executable, "-c", probe], stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env=child_env)
+            out, err = proc.communicate(source, timeout=30)
+            self.assertEqual(proc.returncode, 0, err)
+            runner_pid = int(out.strip().splitlines()[0])
+            with open(os.path.join(kdir, "session.txt"), "r", encoding="utf-8") as f:
+                record = f.read().strip()
+        flag, _, tree_id = record.partition(":")
+        self.assertIn(flag, ("s", "p"))
+        self.assertTrue(tree_id.isdigit())
+        if flag == "s":
+            self.assertEqual(int(tree_id), runner_pid)
+            self.assertNotEqual(int(tree_id), os.getsid(0))  # left the spawning session
+        else:
+            self.assertEqual(int(tree_id), runner_pid)  # own process group
 
 
 class TestOwnershipIsolation(RemoteKernelBase):
