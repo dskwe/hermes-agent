@@ -24,6 +24,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RosterRow } from './types'
 
 interface MentionCompletionItem {
+  aliases?: string[]
   display: string
   insert: string
   meta: string
@@ -365,6 +366,30 @@ describe('@-mention completions', () => {
 
     const result = await handler({ text: '@cos-bot status?' })
     expect(result.text).toMatch(/message_agent target: "default@vps"/)
+  })
+
+  it('claims the raw profile name as an alias when the tag is the title slug', async () => {
+    // dir `eva-2` titled `Eva 🌥`: the picker tags the bot `@eva`, but the
+    // gateway's complete.path rows offer the same profile as `@eva-2`. The
+    // row must claim that raw-name tag so the popover can collapse the twin
+    // instead of listing the bot twice (#122848). An untitled bot tags as its
+    // own name and claims nothing.
+    const { provide } = await contributions({
+      focused: 'default',
+      profiles: [
+        { name: 'default' },
+        { name: 'eva-2', title: 'Eva 🌥', ui_meta: { 'hermes-bots': { title: 'Eva 🌥' } } },
+        { name: 'vinyl' }
+      ]
+    })
+
+    expect(provide('eva')).toEqual([
+      expect.objectContaining({ insert: '@eva', aliases: ['@eva-2'] })
+    ])
+    // An untitled bot tags as its own name — no aliases key, nothing to claim.
+    const vinyl = provide('vin')[0]
+    expect(vinyl.insert).toBe('@vinyl')
+    expect(vinyl.aliases).toBeUndefined()
   })
 })
 

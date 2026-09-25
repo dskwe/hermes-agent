@@ -93,6 +93,10 @@ interface MentionCompletionItem {
   display: string
   insert: string
   meta: string
+  /** Raw-name `@tags` this row's identity also answers to — the gateway's
+   *  `complete.path` offers the same profile under `@<profile name>`, so the
+   *  popover must collapse that row instead of showing both (#122848). */
+  aliases?: string[]
 }
 
 /** The draft a `composer.middleware` handler rewrites, passes through, or
@@ -187,10 +191,17 @@ export default {
             const qualified = (tagCounts.get(tag.toLowerCase()) || 0) > 1 && profile.connectionId
             const insert = qualified ? `@${tag}@${profile.connectionId}` : `@${tag}`
             const source = profile.connectionLabel ? ` · ${profile.connectionLabel}` : ''
+            // Claim the raw profile name too: when it differs from the tag
+            // (dir `eva-2` titled `Eva`), the gateway's own profile rows
+            // would otherwise surface a second, differently-keyed row for
+            // the same bot. Bare name only — the qualified form is the
+            // picker's disambiguator and needs no twin.
+            const aliases = handle.toLowerCase() !== tag.toLowerCase() && !qualified ? [`@${handle}`] : undefined
             items.push({
               insert,
               display: insert,
-              meta: `Bot · ${display}${source}`
+              meta: `Bot · ${display}${source}`,
+              ...(aliases ? { aliases } : {})
             })
           }
 

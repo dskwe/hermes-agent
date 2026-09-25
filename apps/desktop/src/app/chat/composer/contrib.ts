@@ -62,6 +62,12 @@ export interface ComposerAtCompletionItem {
   meta?: string
   /** Icon slug understood by the completion popover; defaults to 'simple'. */
   icon?: string
+  /** Other insert-texts that resolve to the SAME identity (normalized, with
+   *  the leading `@`). Other sources' rows whose text matches one of these
+   *  collapse into this row instead of appearing as a phantom duplicate —
+   *  e.g. the gateway offers `@<profile name>` while Bot Mode tags the same
+   *  profile by its title slug (#122848). */
+  aliases?: string[]
 }
 
 /** Payload of a `composer.atCompletions` data contribution — an extra source

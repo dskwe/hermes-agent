@@ -15,6 +15,9 @@ export interface CompletionEntry {
   /** Optional completion-action id. When set, picking the item runs that action
    *  (e.g. opening an overlay) instead of inserting a chip + waiting for submit. */
   action?: string
+  /** Alternate `@tags` that resolve to the same identity as this entry (see
+   *  ComposerAtCompletionItem.aliases) — consumed by `@`-popover dedup. */
+  aliases?: string[]
 }
 
 export interface CompletionPayload {

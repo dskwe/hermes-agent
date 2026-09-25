@@ -40,23 +40,51 @@ function starterEntries(query: string): CompletionEntry[] {
 }
 
 function mergeCompletionEntries(preferred: CompletionEntry[], fallback: CompletionEntry[]): CompletionEntry[] {
+  // Dedup keys are the insert text PLUS every alias the source declared for
+  // the same routable identity: Bot Mode tags a profile by its title slug
+  // while the gateway offers the raw profile name, and without the alias
+  // both rows survived as phantom duplicates (#122848).
+  const claimed = new Set<string>()
   const seenHandles = new Set<string>()
 
-  return [...preferred, ...fallback].filter(entry => {
+  for (const entry of preferred) {
+    const key = normalize(entry.text)
+
+    if (/^@[^:\s]+$/.test(key) && !SIMPLE_CONTEXT_REFS.has(key)) {
+      claimed.add(key)
+    }
+
+    for (const alias of entry.aliases || []) {
+      const aliasKey = normalize(alias)
+
+      if (aliasKey && /^@[^:\s]+$/.test(aliasKey)) {
+        claimed.add(aliasKey)
+      }
+    }
+  }
+
+  // Preferred rows only dedupe among themselves; a fallback row additionally
+  // dies when a preferred row (or one of its aliases) claimed its key.
+  const keep = (entry: CompletionEntry, suppressed: boolean) => {
     const key = normalize(entry.text)
 
     if (!/^@[^:\s]+$/.test(key) || SIMPLE_CONTEXT_REFS.has(key)) {
       return true
     }
 
-    if (seenHandles.has(key)) {
+    if (seenHandles.has(key) || (suppressed && claimed.has(key))) {
       return false
     }
 
     seenHandles.add(key)
 
     return true
-  })
+  }
+
+  const keepPreferred = (entry: CompletionEntry) => keep(entry, false)
+  const keepFallback = (entry: CompletionEntry) => keep(entry, true)
+
+  return [...preferred.filter(keepPreferred), ...fallback.filter(keepFallback)]
 }
 
 interface AtItemMetadata extends Record<string, string> {
@@ -145,7 +173,8 @@ export function useAtCompletions(options: {
               text: item.insert,
               display: item.display || item.insert,
               meta: item.meta || '',
-              icon: item.icon || ''
+              icon: item.icon || '',
+              ...(item.aliases?.length ? { aliases: item.aliases } : {})
             } as CompletionEntry)
           }
         } catch {

@@ -60,6 +60,29 @@ afterEach(() => {
 })
 
 describe('contributed @ completion sources', () => {
+  it('collapses a gateway profile row claimed by a contributed alias (#122848)', async () => {
+    vi.useFakeTimers()
+    // Bot Mode tags dir `eva-2` (titled `Eva`) as @eva and declares @eva-2 as
+    // an alias of the same identity; the gateway's complete.path offers the
+    // raw profile name. One bot, one row.
+    addSource('bots', q => ('eva'.startsWith(q) ? [{ insert: '@eva', meta: 'Bot · Eva', aliases: ['@eva-2'] }] : []))
+
+    const gateway = gatewayStub([
+      { text: '@eva-2', display: '@eva-2', meta: 'Bot de clima de Bogotá' },
+      { text: '@eva-3', display: '@eva-3', meta: 'a different profile entirely' },
+      { text: '@file:src/eva.md', display: 'eva.md', meta: 'file' }
+    ])
+
+    const { result } = renderHook(() => useAtCompletions({ gateway: gateway as never, sessionId: 's1', cwd: '/repo' }))
+
+    const rows = await searchAndRead(result, 'eva')
+    expect(rows.filter(label => label.toLowerCase() === '@eva')).toEqual(['@eva'])
+    expect(rows).not.toContain('@eva-2')
+    // Only the ALIASED twin collapses — a different profile and file rows survive.
+    expect(rows).toContain('@eva-3')
+    expect(rows.some(label => label.includes('eva.md'))).toBe(true)
+  })
+
   it('merges contributed rows ahead of gateway path results', async () => {
     vi.useFakeTimers()
     addSource('bots', q => ('researcher'.startsWith(q) ? [{ insert: '@researcher', meta: 'Bot · Researcher' }] : []))
