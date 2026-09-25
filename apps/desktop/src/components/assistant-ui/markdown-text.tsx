@@ -422,7 +422,11 @@ function MarkdownImageContent({
   const framed = Boolean(image.frameStyle)
 
   return (
-    <span className="relative my-2 block max-w-full" data-slot="aui_markdown-image" style={image.frameStyle}>
+    <span
+      className={cn('relative my-2 block max-w-full', framed && 'overflow-hidden')}
+      data-slot="aui_markdown-image"
+      style={image.frameStyle}
+    >
       {image.src ? (
         <ZoomableImage
           {...props}

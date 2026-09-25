@@ -115,6 +115,30 @@ it.each(cases)('reserves $kind frames through cold decode, warm return and failu
   }
 })
 
+// Regression for #122982: a framed image whose aspect is taller than the
+// reserved frame must be clipped BY the frame. The framed branch paints the
+// image in an absolutely positioned container; when the percentage chain
+// (h-full/max-h-full against the frame's aspect-ratio box) fails to contain
+// it — as observed in shipped builds — the image painted over the first line
+// after the frame. The markdown frame must clip like the generated-image
+// frame does (GeneratedImage already carries overflow-hidden), and the frame
+// must never be dropped after load: it is the box the following content
+// flows below.
+it.each(cases)('clips a $kind framed image to its frame ($hint)', async ({ kind, hint }) => {
+  const path = `${paths.first}?clip-${kind}-${hint}`
+  const view = render(content(kind, path, hint))
+  const cold = frame(view.container)
+  expect(cold).not.toBeNull()
+  expect(cold.className).toContain('overflow-hidden')
+
+  // After decode the frame stays (stable through the mount) and still clips.
+  await decode(view.container, 1953, 1612)
+  const after = frame(view.container)
+  expect(after.className).toContain('overflow-hidden')
+  expect(parseFloat(after.style.aspectRatio)).toBeGreaterThan(0)
+  view.unmount()
+})
+
 it('keeps the pending generated-image frame when its result arrives', async () => {
   const path = '/geometry/pending.svg'
   const mounted = render(<GeneratedImage aspectRatio="square" />)
