@@ -8,7 +8,10 @@ a file-based CELL protocol in the kernel dir (``cell_req_NNNNNN.json`` /
 (req_/res_) whose host-side ``_rpc_poll_loop`` starts per cell with the calling
 thread's context (= per-cell tool authority); and death detection — a failed
 liveness probe reads as *kernel died: state lost* and the next call respawns,
-never a hung poll (every wait is bounded by the cell timeout).
+never a hung poll (every wait is bounded by the cell timeout); and tree-kill
+teardown — the runner records its session id at boot and every teardown path
+sweeps that whole session (descendants keep the sid after the runner exits and
+is reparented to init), the remote twin of the local kernel's killpg.
 
 Same invariants as local: owner = approval session key with the ``::child::``
 qualifier (one resolver in tools.code_kernel), same generated tool stubs, same
@@ -56,7 +59,35 @@ IDLE_EXIT_SECONDS = {idle_exit}
 
 {cell_source}
 
+def _record_tree_id():
+    """Make our process tree independently killable and record the key.
+
+    ``nohup ... &`` leaves us in the SPAWNING shell's session; sweeping that
+    session would kill unrelated processes (in a container, possibly PID 1).
+    So: become our own session (setsid) — then sid == pgid == our pid and the
+    whole tree, including descendants that outlive us (they keep the sid after
+    reparenting), is reachable as one id (#122581). If setsid is refused
+    because we are already a process-group leader (interactive job control),
+    our process group is still ours alone: record it as a pgid key instead.
+    """
+    pid = os.getpid()
+    tree_id = ""
+    try:
+        os.setsid()
+    except (AttributeError, OSError):
+        try:
+            if os.getpgid(0) == pid:
+                tree_id = f"p:{{pid}}"
+        except (AttributeError, OSError):
+            tree_id = ""
+    else:
+        tree_id = f"s:{{pid}}"
+    with open(os.path.join(KDIR, "session.txt"), "w", encoding="utf-8") as f:
+        f.write(tree_id)
+
+
 def main():
+    _record_tree_id()
     execution_count = 0
     last_activity = time.time()
     while True:
@@ -134,13 +165,34 @@ class RemoteKernel:
             return False
 
     def kill(self) -> None:
-        """Best-effort kill of the runner and its subprocesses, then rm -rf."""
-        q_pid = shlex.quote(self.pid)
+        """Best-effort kill of the runner and its whole process tree, then rm -rf.
+
+        The sweep keys on the session id the runner records in ``session.txt`` at
+        boot: descendants keep that sid after the runner exits and they are
+        reparented to init (idle self-exit, ``sys.exit()`` cell, teardown after a
+        timed-out cell), so the tree is still reachable then — ``pkill -P`` only
+        ever matched living DIRECT children (#122581). TERM, short grace, KILL
+        mirrors the local kernel's process-group escalation.
+        """
+        q_pid, q_dir = shlex.quote(self.pid), shlex.quote(self.kernel_dir)
+        try:
+            record = self.sh(f"cat {q_dir}/session.txt 2>/dev/null", timeout=10).strip()
+        except Exception:
+            record = ""
+        flag, _, tree_id = record.partition(":")
+        # pkill matches sessions with -s and process GROUPS with -g; the record
+        # prefix says which kind of id the runner owns ("s:<sid>"/"p:<pgid>").
+        pkill_flag = {"s": "s", "p": "g"}.get(flag) if tree_id.isdigit() else None
+        if pkill_flag:
+            sweep = (f"pkill -TERM -{pkill_flag} {tree_id} 2>/dev/null; sleep 1; "
+                     f"pkill -KILL -{pkill_flag} {tree_id} 2>/dev/null; kill {q_pid} 2>/dev/null; true")
+        else:
+            # No tree record (runner died before recording it, or a non-POSIX
+            # remote): the pre-fix best-effort — direct children, then the runner.
+            sweep = f"pkill -TERM -P {q_pid} 2>/dev/null; kill {q_pid} 2>/dev/null; true"
         for cmd, failure in (
-            # Kill the runner's children if the shell gave it a group, then the PID itself.
-            (f"pkill -TERM -P {q_pid} 2>/dev/null; kill {q_pid} 2>/dev/null; true",
-             "remote kernel kill failed (transport?)"),
-            (f"rm -rf {shlex.quote(self.kernel_dir)}", "remote kernel dir cleanup failed"),
+            (sweep, "remote kernel tree kill failed (transport?)"),
+            (f"rm -rf {q_dir}", "remote kernel dir cleanup failed"),
         ):
             try:
                 self.sh(cmd)
@@ -265,8 +317,8 @@ def _acquire_remote_kernel(env, env_type: str, owner: str, task_env_id: str,
         kernel, state_reset = None, True
     if kernel is not None and not kernel.is_alive():
         # Transport drop, container restart, self-reaped on idle, OOM — all
-        # the same answer: report the loss, respawn fresh (kill is then only
-        # best-effort dir cleanup; the process is already gone).
+        # the same answer: report the loss, respawn fresh (kill still sweeps the
+        # runner's session tree — orphaned descendants keep its sid — and cleans the dir).
         _REGISTRY.discard(key, kernel)
         kernel, state_lost = None, True
     reused = kernel is not None
@@ -375,8 +427,9 @@ def _run_attached_cell(kernel: RemoteKernel, key: Tuple, code: str, *, env, task
         if cell_status == "timeout":
             result["status"] = "timeout"
         kernel_info.update(ended=True, state_lost=True, note=(
-            "Cell timed out; the remote session kernel was killed and its state was lost. The next call "
-            "starts a fresh kernel." if cell_status == "timeout"
+            "Cell timed out; the remote session kernel and the processes it had started were "
+            "killed and the kernel's state was lost. The next call starts a fresh kernel."
+            if cell_status == "timeout"
             else "Remote kernel protocol failure; kernel killed, state lost."))
         return result
     if cell_status == "exit":
