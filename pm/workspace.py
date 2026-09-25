@@ -22,9 +22,93 @@ from pm.plugin_declarations import read_python_declaration, manifest_version_err
 
 _MEMBER_EXCLUDE = frozenset({".git", ".venv", "venv", "node_modules", "__pycache__"})
 
+# Conventional runtime-state suffixes, checked at the member root only: a
+# plugin writing a SQLite database, a watermark file, or a queue log into its
+# own directory is reasonable plugin behaviour, and none of those are build
+# inputs. Deeper declarations belong in the plugin's .gitignore.
+_MEMBER_STATE_SUFFIXES = (".db", ".db-wal", ".db-shm", ".db-journal", ".sqlite",
+                          ".sqlite-wal", ".sqlite-shm", ".jsonl", ".log", ".tmp", ".pid")
+
 
 def _member_ignored(directory, names):
     return [name for name in names if name in _MEMBER_EXCLUDE or name.endswith(".egg-info")]
+
+
+def _parse_ignore_line(line: str) -> "str | None":
+    """One gitignore pattern, or None for blanks/comments/negations."""
+    line = line.strip()
+    if not line or line.startswith("#"):
+        return None
+    if line.startswith("\\#") or line.startswith("\\!"):
+        line = line[1:]
+    if line.startswith("!"):
+        return None  # negations unsupported: build inputs never un-ignore state
+    while line.startswith("/"):
+        line = line[1:]
+    if line.endswith("/"):
+        line = line[:-1]
+    return line or None
+
+
+def _iter_ignore_patterns(entry: Path):
+    """``.gitignore`` patterns under ``entry`` as ``(directory, pattern)`` pairs.
+
+    Walks with the same pruning as ``members_stamp`` (no .git/.venv/node_modules
+    descent) so a nested .gitignore inside excluded trees is never consulted.
+    """
+    stack = [entry]
+    while stack:
+        directory = stack.pop()
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            if name in _MEMBER_EXCLUDE or name.endswith(".egg-info"):
+                continue
+            path = directory / name
+            if path.is_dir() and not path.is_symlink():
+                stack.append(path)
+        ignore_file = directory / ".gitignore"
+        try:
+            text = ignore_file.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        for raw in text.splitlines():
+            pattern = _parse_ignore_line(raw)
+            if pattern is not None:
+                yield directory, pattern
+
+
+def _match_ignore(relative_parts: "tuple[str, ...]", directory: Path, entry: Path, pattern: str) -> bool:
+    """gitignore-flavoured match of one member-relative path against one pattern."""
+    import fnmatch
+
+    try:
+        base = directory.relative_to(entry).parts
+    except ValueError:
+        return False
+    parts = relative_parts[len(base):] if relative_parts[:len(base)] == base else None
+    if not parts:
+        return False
+    if "/" not in pattern:
+        return any(fnmatch.fnmatchcase(part, pattern) for part in parts)
+    joined = "/".join(parts)
+    return fnmatch.fnmatchcase(joined, pattern) or joined.startswith(pattern + "/")
+
+
+def _is_member_state(path: Path, entry: Path, ignore: "set[tuple[Path, str]]") -> bool:
+    """True when ``path`` is runtime state rather than a member build input."""
+    try:
+        relative = path.relative_to(entry)
+    except ValueError:
+        return False
+    if not relative.parts:
+        return False
+    if len(relative.parts) == 1 and relative.suffix in _MEMBER_STATE_SUFFIXES:
+        return True
+    return any(_match_ignore(relative.parts, directory, entry, pattern)
+               for directory, pattern in ignore)
 
 
 # The uv failure classifier lives beside the uv runner (stdlib-only imports): the bootstrap
@@ -40,13 +124,23 @@ def member_sources(plugin_dirs) -> dict[Path, Path]:
 
 
 def members_stamp(plugin_dirs) -> str:
-    """Hash the member inputs copied into a generation, independent of staging paths."""
+    """Hash the member inputs copied into a generation, independent of staging paths.
+
+    Runtime state — a database or watermark the plugin writes into its own
+    directory while running — is not a build input and must not change the
+    stamp, or every launch re-syncs (#122349). Conventional state suffixes at
+    the member root and the plugin's own ``.gitignore`` declarations are
+    excluded from the hash.
+    """
     h = hashlib.sha256()
     for identity, entry in sorted(member_sources(plugin_dirs).items()):
         h.update(str(identity).encode("utf-8"))
         h.update(b"\0")
+        ignore = set(_iter_ignore_patterns(entry))
         declaration = read_python_declaration(entry)
         for source in declaration.files:
+            if _is_member_state(source, entry, ignore):
+                continue
             h.update(source.name.encode("utf-8"))
             h.update(source.read_bytes())
             h.update(b"\0")
@@ -55,6 +149,8 @@ def members_stamp(plugin_dirs) -> str:
                 dirs[:] = sorted(set(dirs) - set(_member_ignored(directory, dirs)))
                 for name in sorted(set(files) - set(_member_ignored(directory, files))):
                     path = Path(directory) / name
+                    if _is_member_state(path, entry, ignore):
+                        continue
                     h.update(path.relative_to(entry).as_posix().encode())
                     h.update(b"\0")
                     h.update(os.readlink(path).encode() if path.is_symlink() else path.read_bytes())
@@ -250,8 +346,12 @@ def _workspace_member(plugin_dir: Path, root: Path, *, identity: Path) -> Path:
     pyproject = declaration.pyproject
     if pyproject is not None:
         member = root / "plugin-sources" / key
+        ignore = set(_iter_ignore_patterns(plugin_dir))
         shutil.copytree(plugin_dir, member, symlinks=True,
-                        ignore=_member_ignored)
+                        ignore=lambda directory, names: sorted(
+                            set(_member_ignored(directory, names))
+                            | {name for name in names
+                               if _is_member_state(Path(directory) / name, plugin_dir, ignore)}))
         document = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
         # uv identifies a workspace member by [project].name, so the same virtual
         # plugin enabled in two profiles would declare one name twice and fail
