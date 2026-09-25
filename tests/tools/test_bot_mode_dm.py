@@ -612,7 +612,7 @@ def test_live_dm_runner_retry_never_reexecutes_failed_claim(tmp_path, monkeypatc
     monkeypatch.setenv("HERMES_HOME", str(home))
     owner = dict(profile_home=str(target), session_id="bot", lease_id="lease", live_session_id="live")
     monkeypatch.setattr(live, "find_canonical_live_owner", lambda h: owner)
-    monkeypatch.setattr(bot_mode_dm, "_LIVE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(bot_mode_dm, "_reply_wait_seconds", lambda: 0.0)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("must not launch a model turn"))
     dm_file = tmp_path / "message.txt"
     dm_file.write_text("hello", encoding="utf-8")
@@ -1050,7 +1050,7 @@ def test_settled_live_wait_unlinks_the_intent_but_a_pending_one_keeps_it(tmp_pat
     dm_file.write_text("secret plaintext", encoding="utf-8")
     intent = tmp_path / "dm-x.txt.live.json"
     intent.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(bot_mode_dm, "_LIVE_WAIT_SECONDS", 0)
+    monkeypatch.setattr(bot_mode_dm, "_reply_wait_seconds", lambda: 0.0)
 
     monkeypatch.setattr(live, "read_delivery_result", lambda home, did: {"status": "queued"})
     assert bot_mode_dm._wait_live_dm(str(tmp_path), "d1", dm_file=dm_file) == 0
@@ -1210,3 +1210,58 @@ def test_local_turn_relays_utf8_reply_under_a_gbk_default_codec(tmp_path, monkey
 
     assert bot_mode_dm._run_local_turn(argv, str(dm_file)) == 0
     assert reply in capsys.readouterr().out
+
+
+# ── late-settled live reply reaches the sender (#123034) ─────────────────────
+
+
+def test_live_dm_runner_hands_the_waiter_a_budget_that_outlives_a_busy_target(tmp_path, monkeypatch, capsys):
+    """The runner's wait budget is the configurable long one (relay-lane whole-delivery budget by
+    default), never the old fixed 300 s: a target busy longer than that still owes the sender its
+    reply, and the durable receipt is what carries it (#123034). 0 waits until settlement."""
+    from tools import bot_live_delivery as live
+
+    dm_file = tmp_path / "dm-late.txt"
+    dm_file.write_text("ping", encoding="utf-8")
+    did = "d1" * 16  # 32 lowercase hex chars: _delivery_id's shape
+    budgets = []
+
+    def _await(home, delivery_id, timeout, **kwargs):
+        budgets.append(timeout)
+        return {"status": "claimed", "delivery_id": delivery_id} if timeout else (
+            live.read_delivery_result(home, delivery_id))
+
+    monkeypatch.setattr(live, "await_delivery", _await)
+    # No config, no monkeypatched knob: the default must be the long budget, not 300.
+    assert bot_mode_dm._wait_live_dm(str(tmp_path), did, dm_file=dm_file) == 0
+    pending = json.loads(capsys.readouterr().out)
+    assert pending["status"] == "claimed" and "Do not resend" in pending["detail"]
+    assert budgets[0] > 300, budgets
+
+    # The owner settles the retained receipt later; a runner waiting on it (0 = until settlement)
+    # emits the reply as its completion notice instead of a second pending notice.
+    live.deliver_to_live_owner(
+        tmp_path, dict(profile_home=str(tmp_path), session_id="s", lease_id="l", live_session_id="v"),
+        "ping", delivery_id=did)
+    live.claim_pending_delivery(
+        tmp_path, dict(profile_home=str(tmp_path), session_id="s", lease_id="l", live_session_id="v"))
+    live.complete_delivery(tmp_path, did, status="settled", reply="PONG")
+    monkeypatch.setattr(bot_mode_dm, "_reply_wait_seconds", lambda: 0.0)
+    assert bot_mode_dm._wait_live_dm(str(tmp_path), did, dm_file=dm_file) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "settled" and out["reply"] == "PONG"
+    assert budgets[-1] == 0.0
+
+
+def test_reply_wait_seconds_knob_semantics(monkeypatch):
+    """bot_mode.reply_wait_seconds: configured value wins, invalid values fall back to the relay
+    lane's whole-delivery budget, absent means the same fallback (never the sync lanes' 300)."""
+    from tools import bot_relay
+
+    monkeypatch.setattr(bot_relay, "_bot_mode_cfg", lambda key, *, loader: 60)
+    assert bot_mode_dm._reply_wait_seconds() == 60.0
+    monkeypatch.setattr(bot_relay, "_bot_mode_cfg", lambda key, *, loader: "nope")
+    assert bot_mode_dm._reply_wait_seconds() == float(bot_relay.REPLY_WAIT_SECONDS)
+    monkeypatch.setattr(bot_relay, "_bot_mode_cfg", lambda key, *, loader: None)
+    assert bot_mode_dm._reply_wait_seconds() == float(bot_relay.REPLY_WAIT_SECONDS)
+    assert bot_relay.REPLY_WAIT_SECONDS > 300

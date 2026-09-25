@@ -48,6 +48,10 @@ REPLY_COMPLETION_CHARS = MESSAGE_MAX_CHARS + 2000
 # the machine dies between spawn ack and the runner's finally.
 _DM_DIR_NAME = "hermes-dm"
 _DM_STALE_SECONDS = 24 * 60 * 60
+# Budget for callers that hold a synchronous request open while waiting on a live-owner receipt
+# (the Desktop relay RPC, api_server chat completions). The local delivery runner does NOT use
+# this: it must outlive the target's whole busy stretch, so it reads
+# ``bot_mode.reply_wait_seconds`` instead (see _reply_wait_seconds).
 _LIVE_WAIT_SECONDS = 300
 
 # '<peer>/<agent>' — peer names are lowercase (``hermes peer`` normalizes them).
@@ -510,10 +514,31 @@ def _admit_live_dm(profile_home: Path | None, dm_file: str, author: Optional[dic
     return record
 
 
+def _reply_wait_seconds() -> float:
+    """How long the local delivery runner waits for the target's receipt (``bot_mode.reply_wait_seconds``).
+
+    The default matches the relay lane's whole-delivery budget (``bot_relay.REPLY_WAIT_SECONDS``:
+    turn wait + two turn attempts + settlement margin + re-offer + headroom ≈ 52 min) — the longest
+    a busy live owner can legitimately hold a DM before settling it. A shorter budget than the
+    target's busy stretch is exactly the #123034 loss window: the runner exits with the receipt
+    still pending, and the later settled reply reaches nobody. ``0`` waits until settlement.
+    Sync lanes (relay RPC, api_server chat completions) keep ``_LIVE_WAIT_SECONDS``: they hold an
+    open request, so their pending degradation is an explicit "queued, do not resend" answer.
+    """
+    from tools.bot_relay import REPLY_WAIT_SECONDS, _bot_mode_cfg
+
+    val = _bot_mode_cfg("reply_wait_seconds", loader="load_config")
+    try:
+        return max(0.0, float(val)) if val is not None else float(REPLY_WAIT_SECONDS)
+    except (TypeError, ValueError, OverflowError):
+        logger.debug("Invalid bot_mode.reply_wait_seconds %r; using fallback", val)
+        return float(REPLY_WAIT_SECONDS)
+
+
 def _wait_live_dm(home: str, delivery_id: str, *, dm_file: "str | os.PathLike | None" = None) -> int:
     from tools.bot_live_delivery import await_delivery
 
-    record = await_delivery(home, delivery_id, _LIVE_WAIT_SECONDS)
+    record = await_delivery(home, delivery_id, _reply_wait_seconds())
     status = record["status"] if record else "ambiguous"
     payload = {key: record[key] for key in ("reply", "error", "reason") if record and record.get(key)}
     payload.update(status=status, delivery_id=delivery_id)

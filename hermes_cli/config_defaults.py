@@ -1937,6 +1937,12 @@ DEFAULT_CONFIG = {
         # before failing with a structured 'target_busy' error. Deliveries are serialized per
         # profile with a cross-process file lock.
         "turn_wait_seconds": 120,
+        # How long the local message_agent delivery runner waits for the target's live-owner
+        # receipt before giving up as still-pending. The receipt is durable and at-most-once, so
+        # the default (the relay lane's whole-delivery budget, ~52 min) covers a busy target's
+        # whole long turn; a shorter budget re-opens the lost-reply window (#123034). 0 = wait
+        # until settlement.
+        "reply_wait_seconds": 3120,
     },
     "code_execution": {  # execute_code settings (programmatic tool calls).
         # project = run in the session cwd with the active venv/conda python so project deps and
