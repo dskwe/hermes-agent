@@ -223,6 +223,14 @@ def _file_content_hash(path: Path) -> str:
         return ""
 
 
+# Node paths whose ``--version`` probe already passed. check_fn runs once per platform per
+# ``load_gateway_config()`` — 33 platforms on the dashboard's ``GET /api/messaging/platforms`` —
+# and with endpoint antivirus each spawn costs 1–2s, turning the route into a 60s timeout
+# (#124065). Keyed by resolved path so a per-profile PM selection is a distinct entry.
+# Successes only: a failing node is re-probed so a ``hermes pm`` install heals without a restart.
+_NODE_VERIFIED: set[str] = set()
+
+
 def check_whatsapp_requirements() -> bool:
     """
     Check if WhatsApp dependencies are available.
@@ -235,10 +243,15 @@ def check_whatsapp_requirements() -> bool:
 
         # Let connect prepare a missing runtime, but never install during discovery.
         return lazy_installs_allowed()
+    if _node in _NODE_VERIFIED:
+        return True
     try:
-        return subprocess.run([_node, "--version"], timeout=5, env=with_hermes_node_path(), **_RUN_TEXT).returncode == 0
+        ok = subprocess.run([_node, "--version"], timeout=5, env=with_hermes_node_path(), **_RUN_TEXT).returncode == 0
     except Exception:
         return False
+    if ok:
+        _NODE_VERIFIED.add(_node)
+    return ok
 
 
 # Env vars bridge.js consumes; injected because a multiplexed subprocess's os.environ lacks the secondary profile's .env.

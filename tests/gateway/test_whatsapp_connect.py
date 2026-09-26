@@ -490,3 +490,56 @@ class TestNoCredsPreflight:
         # but the fatal-error code is NOT the "not paired" one.
         assert result is False
         assert adapter._fatal_error_code != "whatsapp_not_paired"
+
+
+class TestNodeVersionProbeCache:
+    """check_fn runs once per platform per load_gateway_config() - 33 spawns of
+    `node --version` per dashboard platforms request (#124065). The probe result
+    must be cached per resolved node path, successes only."""
+
+    def test_second_call_skips_subprocess_after_success(self, tmp_path):
+        from plugins.platforms.whatsapp import adapter as wa
+
+        fake_node = tmp_path / "node"
+        fake_node.write_text("")
+        wa._NODE_VERIFIED.clear()
+        try:
+            with patch.object(wa, "find_node_executable", return_value=str(fake_node)), \
+                 patch.object(wa.subprocess, "run", return_value=MagicMock(returncode=0)) as run:
+                assert wa.check_whatsapp_requirements() is True
+                assert wa.check_whatsapp_requirements() is True
+                assert run.call_count == 1  # cached: second call never spawns
+        finally:
+            wa._NODE_VERIFIED.clear()
+
+    def test_failure_is_not_cached(self, tmp_path):
+        from plugins.platforms.whatsapp import adapter as wa
+
+        fake_node = tmp_path / "node"
+        fake_node.write_text("")
+        wa._NODE_VERIFIED.clear()
+        try:
+            with patch.object(wa, "find_node_executable", return_value=str(fake_node)), \
+                 patch.object(wa.subprocess, "run", return_value=MagicMock(returncode=1)) as run:
+                assert wa.check_whatsapp_requirements() is False
+                assert wa.check_whatsapp_requirements() is False
+                assert run.call_count == 2  # a failing node keeps being re-probed
+        finally:
+            wa._NODE_VERIFIED.clear()
+
+    def test_distinct_paths_probe_independently(self, tmp_path):
+        from plugins.platforms.whatsapp import adapter as wa
+
+        node_a = tmp_path / "nodeA"
+        node_a.write_text("")
+        node_b = tmp_path / "nodeB"
+        node_b.write_text("")
+        wa._NODE_VERIFIED.clear()
+        try:
+            with patch.object(wa, "find_node_executable", side_effect=[str(node_a), str(node_b)]), \
+                 patch.object(wa.subprocess, "run", return_value=MagicMock(returncode=0)) as run:
+                assert wa.check_whatsapp_requirements() is True
+                assert wa.check_whatsapp_requirements() is True
+                assert run.call_count == 2  # per-path cache, not global bool
+        finally:
+            wa._NODE_VERIFIED.clear()
