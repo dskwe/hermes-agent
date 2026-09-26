@@ -7,8 +7,10 @@ remain build-owned. ``--check`` is passive and never provisions tools.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -307,13 +309,31 @@ def _finish_source_update(root: Path, *, current: bool, pending: Path) -> None:
     # The tail's progress lines go to stderr: this is an automatic repair in
     # front of whatever command the user ran, and that command may be
     # emitting machine-readable stdout (a JSON probe, a piped query).
-    code = subprocess.call(
-        [sys.executable, "-I", "-B", "-u",
-         str(root / "hermes_cli/source_completion.py"),
-         "--source", str(root), "--finish-update",
-         *(("--desktop",) if desktop else ())],
-        cwd=root, env=activation_environment(root), stdout=sys.__stderr__,
+    # stdin comes from DEVNULL and the tail runs in its own process group:
+    # it re-execs into PM's interpreter and a maintenance step can prompt
+    # (a memory-provider migration needs dependency consent), but this is an
+    # AUTOMATIC repair no user asked for -- reading our stdin wedges every
+    # future launch behind the same question (#124471), and a Ctrl+C that
+    # kills only the intermediate bootstrap would orphan the re-exec'd
+    # worker, which keeps prompting on the tty after the shell prompt
+    # returned. The group kill reaps the whole chain; a step that needed an
+    # answer auto-declines and says so, and the usual one-liners still apply.
+    command = [sys.executable, "-I", "-B", "-u",
+               str(root / "hermes_cli/source_completion.py"),
+               "--source", str(root), "--finish-update",
+               *(("--desktop",) if desktop else ())]
+    process = subprocess.Popen(
+        command, cwd=root, env=activation_environment(root), stdout=sys.__stderr__,
+        stdin=subprocess.DEVNULL, start_new_session=True,
     )
+    try:
+        code = process.wait()
+    except KeyboardInterrupt:
+        with contextlib.suppress(Exception):
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGINT)
+        process.wait()
+        raise
     if code != 0:
         raise RuntimeError(
             "source update completion failed; run `hermes update` to finish it"
