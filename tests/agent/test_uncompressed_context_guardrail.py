@@ -30,11 +30,17 @@ class _FakeUncompressedAgent(_FakeAgent):
     )
     _clear_context_overflow_warn = AIAgent._clear_context_overflow_warn
 
-    def __init__(self, model="deepseek-v4-flash", context_length=10_000):
+    def __init__(self, model="deepseek-v4-flash", context_length=10_000,
+                 config_enabled: bool = False):
         super().__init__()
         self.model = model
         self.provider = "deepseek"
         self.compression_enabled = False
+        # What config.yaml said (agent/agent_init.py sets this alongside
+        # ``compression_enabled``). False = the user disabled compression in
+        # config; True = config left it on and something else (a host
+        # integration) disabled it programmatically (#123500).
+        self.compression_config_enabled = config_enabled
         self.context_compressor = types.SimpleNamespace(
             protect_first_n=2,
             protect_last_n=2,
@@ -63,6 +69,45 @@ def test_production_warn_emits_once_and_dedups():
     msg = agent._emit_warning.call_args[0][0]
     assert "compression.enabled: false" in msg
     assert "10,000 tokens" in msg
+
+def test_production_warn_config_disabled_copy_is_actionable():
+    """Config-disabled (compression.enabled: false): the warning names the flag
+    and points at config.yaml — the only place that can fix it."""
+    agent = _FakeUncompressedAgent(context_length=10_000, config_enabled=False)
+    agent._emit_warning = MagicMock()
+
+    agent._warn_uncompressed_context_overflow(15_000, 10_000)
+
+    msg = agent._emit_warning.call_args[0][0]
+    assert "compression.enabled: false" in msg
+    assert "enable compression in config.yaml" in msg
+
+def test_production_warn_host_managed_copy_does_not_blame_config():
+    """Host integrations disable compression programmatically after init
+    (#123500) while config.yaml still says enabled: true. The warning must not
+    claim ``compression.enabled: false`` nor send the user to config.yaml."""
+    agent = _FakeUncompressedAgent(context_length=10_000, config_enabled=True)
+    agent._emit_warning = MagicMock()
+
+    agent._warn_uncompressed_context_overflow(15_000, 10_000)
+
+    msg = agent._emit_warning.call_args[0][0]
+    assert "compression.enabled: false" not in msg
+    assert "config.yaml" not in msg
+    assert "host application" in msg
+    assert "10,000 tokens" in msg
+    # The core's manual path is offered in both cases.
+    assert "/compact" in msg
+
+def test_production_warn_host_managed_dedups_too():
+    """The host-managed variant dedups on the same key — no per-turn spam."""
+    agent = _FakeUncompressedAgent(context_length=10_000, config_enabled=True)
+    agent._emit_warning = MagicMock()
+
+    agent._warn_uncompressed_context_overflow(15_000, 10_000)
+    agent._warn_uncompressed_context_overflow(16_000, 10_000)
+
+    agent._emit_warning.assert_called_once()
 
 def test_clear_rearms_the_warning():
     """After _clear_context_overflow_warn (session back under the window),
@@ -142,3 +187,19 @@ def test_multimodal_content_forces_real_estimate_in_rearm_gate():
     tctx = _build(agent, conversation_history=history)
     assert isinstance(tctx, TurnContext)
     assert agent._last_ctx_overflow_warn is None
+
+
+def test_compression_disabled_copy_variants():
+    """Contract between the two overflow-recovery copy variants: the config
+    variant may blame settings; the host variant must not (#123500)."""
+    from agent.turn_failure_copy import site_copy
+    cfg = site_copy("compression_disabled", model="m")
+    host = site_copy("compression_disabled_host", model="m")
+    assert "compression.enabled" in cfg
+    assert "your settings" in cfg
+    assert "compression.enabled" not in host
+    assert "your settings" not in host
+    assert "host application" in host
+    # Both offer the same three remedies.
+    for msg in (cfg, host):
+        assert "/compress" in msg and "/new" in msg and "bigger context window" in msg

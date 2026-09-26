@@ -1995,6 +1995,11 @@ def _build_context_engine(agent, _agent_cfg, cs, _custom_providers, _effective_c
         with suppress(Exception):
             _bind_session_state(session_db=session_db, session_id=agent.session_id)
     agent.compression_enabled = cs.enabled
+    # What the CONFIG said. ``compression_enabled`` is a plain attribute a host
+    # integration may flip programmatically after init (the host owns compression
+    # then, #123500); copy sites branch on the mismatch instead of claiming the
+    # user turned compression off in config.yaml.
+    agent.compression_config_enabled = cs.enabled
     agent.compression_in_place = cs.in_place
     _cc = agent.context_compressor
     # Micro-compaction has no pre-compress checkpoint hook; suppress it while the gate is

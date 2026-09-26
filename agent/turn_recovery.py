@@ -1804,18 +1804,33 @@ def route_classified_error(
         and not _is_output_cap_error
     ):
         agent._flush_status_buffer()
-        _vlines(
-            agent,
-            "❌ The conversation is too long for the model and automatic shrinking is off (compression.enabled: false).",
-            "   💡 Run /compress to shrink it now, /new to start fresh, "
-            "pick a model with a bigger context window, or remove attachments.",
-        )
+        if getattr(agent, "compression_enabled", True) == getattr(agent, "compression_config_enabled", True):
+            _vlines(
+                agent,
+                "❌ The conversation is too long for the model and automatic shrinking is off (compression.enabled: false).",
+                "   💡 Run /compress to shrink it now, /new to start fresh, "
+                "pick a model with a bigger context window, or remove attachments.",
+            )
+        else:
+            # Host-managed compression (#123500): the config flag is true; don't
+            # send the user to config.yaml or blame "your settings".
+            _vlines(
+                agent,
+                "❌ The conversation is too long for the model and automatic shrinking is not active in this session (compression is managed by the host application).",
+                "   💡 Run /compress to shrink it now, /new to start fresh, "
+                "pick a model with a bigger context window, or remove attachments.",
+            )
         logger.error(
             f"{agent.log_prefix}Context overflow ({classified.reason.value}) with "
             f"auto-compaction disabled — not compressing."
         )
         agent._persist_session(messages, conversation_history)
-        _final_response = site_copy("compression_disabled", model=agent.model)
+        _host_owns = getattr(agent, "compression_enabled", True) != getattr(
+            agent, "compression_config_enabled", True)
+        _final_response = site_copy(
+            "compression_disabled_host" if _host_owns else "compression_disabled",
+            model=agent.model,
+        )
         return _verdict("return", stamp_failure({
             "final_response": _final_response, "messages": messages, "completed": False,
             "api_calls": api_call_count, "error": _final_response, "partial": True, "failed": True,

@@ -1571,4 +1571,9 @@ class TestOverflowWithCompactionDisabled:
         assert result.get("failed") is True
         assert result.get("compaction_disabled") is True
         assert result["failure_reason"] == "context_overflow" and result["failure_retryable"] is False
-        assert "/compress" in result["error"] and "compression.enabled" in result["error"]
+        # The flag was flipped programmatically on an agent whose config left
+        # compression enabled — the host-managed scenario (#123500): copy must
+        # not claim the user turned compression off in config.yaml.
+        assert "/compress" in result["error"]
+        assert "host application" in result["error"]
+        assert "compression.enabled" not in result["error"]
