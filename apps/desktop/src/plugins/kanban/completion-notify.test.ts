@@ -57,6 +57,24 @@ function makeRest(latest: () => number) {
   })
 }
 
+/** Rest stub that answers both doors: GET /boards (alias resolution) and
+ *  GET /board (baseline). */
+function makeAliasRest(latest: () => number, current: string | (() => string) = 'default') {
+  return vi.fn(async (path: string) => {
+    if (path === '/boards') {
+      const cur = typeof current === 'function' ? current() : current
+
+      return { boards: [{ slug: cur }], current: cur }
+    }
+
+    if (path.startsWith('/board')) {
+      return { latest_event_id: latest() }
+    }
+
+    throw new Error(`unexpected rest call: ${path}`)
+  })
+}
+
 async function loadModule(): Promise<Mod> {
   vi.resetModules()
 
@@ -311,16 +329,17 @@ describe('board isolation', () => {
 })
 
 describe('ambiguous alias', () => {
-  it("empty slug ('' = server current board) is suppressed and never queried", async () => {
-    const rest = makeRest(() => 100)
+  it("empty slug ('' = server current board) resolves via /boards and notifies on the current board", async () => {
+    const rest = makeAliasRest(() => 100)
     const m = await loadModule()
     m.bindCompletionNotify(rest as never)
 
     const fired = await m.onKanbanEventsFrame('', [ev(101, 'completed')])
 
-    expect(fired).toBe(false)
-    expect(hostMock.notify).not.toHaveBeenCalled()
-    expect(rest).not.toHaveBeenCalled()
+    expect(fired).toBe(true)
+    expect(hostMock.notify).toHaveBeenCalledTimes(1)
+    expect(rest).toHaveBeenCalledWith('/boards')
+    expect(rest).toHaveBeenCalledWith('/board?board=default')
   })
 })
 
@@ -374,6 +393,111 @@ describe('notification content', () => {
 
     lastNotify().action?.onClick()
     expect(hostMock.navigate).toHaveBeenCalledWith('/kanban')
+  })
+})
+
+describe('empty-slug alias (server current board)', () => {
+  it('no explicit selection: post-baseline blocked event notifies once', async () => {
+    const m = await loadModule()
+    m.bindCompletionNotify(makeAliasRest(() => 100) as never)
+
+    const fired = await m.onKanbanEventsFrame('', [ev(101, 'blocked', { reason: 'needs API key' })])
+
+    expect(fired).toBe(true)
+    expect(hostMock.notify).toHaveBeenCalledTimes(1)
+    expect(lastNotify()).toMatchObject({ kind: 'warning', message: 'needs API key' })
+  })
+
+  it('classification runs against the resolved board, not the alias', async () => {
+    const rest = makeAliasRest(() => 100)
+    const m = await loadModule()
+    m.bindCompletionNotify(rest as never)
+
+    await m.onKanbanEventsFrame('', [ev(101, 'completed')])
+    expect(hostMock.notify).toHaveBeenCalledTimes(1)
+
+    // Cursor + baseline are keyed by the resolved slug: the explicit slug and
+    // '' land on the same cursor space, so replays stay suppressed.
+    const again = await m.onKanbanEventsFrame('default', [ev(101, 'completed')])
+    expect(again).toBe(false)
+    expect(hostMock.notify).toHaveBeenCalledTimes(1)
+    expect(rest).toHaveBeenCalledWith('/board?board=default')
+  })
+
+  it('re-resolves when the server switches its current board', async () => {
+    let current = 'default'
+    const rest = makeAliasRest(() => 100, () => current)
+    const m = await loadModule()
+    m.bindCompletionNotify(rest as never)
+
+    // Baselines 'default' at 100, cursor advances to 103.
+    await m.onKanbanEventsFrame('', [ev(101, 'completed'), ev(102, 'created'), ev(103, 'completed')])
+
+    // Server-side switch: the next alias frame classifies against 'beta'.
+    current = 'beta'
+    const fired = await m.onKanbanEventsFrame('', [ev(104, 'crashed', null, 'beta-1')])
+    expect(fired).toBe(true)
+    expect(rest).toHaveBeenCalledWith('/board?board=beta')
+    expect(hostMock.notify).toHaveBeenCalledTimes(3)
+  })
+
+  it('alias resolution failure is fail-closed and later success binds', async () => {
+    let failBoards = true
+
+    const rest = vi.fn(async (path: string) => {
+      if (path === '/boards') {
+        if (failBoards) {
+          throw new Error('boards unavailable')
+        }
+
+        return { boards: [], current: 'default' }
+      }
+
+      if (path.startsWith('/board')) {
+        return { latest_event_id: 200 }
+      }
+
+      throw new Error(`unexpected rest call: ${path}`)
+    })
+
+    const m = await loadModule()
+    m.bindCompletionNotify(rest as never)
+
+    const fired1 = await m.onKanbanEventsFrame('', [ev(150, 'completed')])
+    expect(fired1).toBe(false)
+    expect(hostMock.notify).not.toHaveBeenCalled()
+
+    // Resolution succeeds: baseline is the CURRENT MAX, so 150 is history.
+    failBoards = false
+    const fired2 = await m.onKanbanEventsFrame('', [ev(150, 'completed')])
+    expect(fired2).toBe(false)
+
+    const fired3 = await m.onKanbanEventsFrame('', [ev(201, 'completed')])
+    expect(fired3).toBe(true)
+    expect(hostMock.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('an empty `current` from the server is fail-closed', async () => {
+    const rest = vi.fn(async (path: string) => {
+      if (path === '/boards') {
+        return { boards: [], current: '' }
+      }
+
+      if (path.startsWith('/board')) {
+        return { latest_event_id: 100 }
+      }
+
+      throw new Error(`unexpected rest call: ${path}`)
+    })
+
+    const m = await loadModule()
+    m.bindCompletionNotify(rest as never)
+
+    const fired = await m.onKanbanEventsFrame('', [ev(101, 'completed')])
+    expect(fired).toBe(false)
+    expect(hostMock.notify).not.toHaveBeenCalled()
+    // No baseline may be attempted against the alias itself.
+    expect(rest).toHaveBeenCalledTimes(1)
   })
 })
 

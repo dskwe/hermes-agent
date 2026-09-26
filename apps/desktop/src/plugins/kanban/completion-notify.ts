@@ -24,7 +24,12 @@
  * kinds emit. Reconnect replays from 0; cursor filters. Board switch never
  * mixes cursors; returning reuses prior cursor (never reset to current MAX).
  * Fail-closed: while a board's baseline is unknown, no event can be
- * classified so none is notified. Empty slug ('') suppressed.
+ * classified so none is notified. The empty slug ('') is the ALIAS for the
+ * server's current board (the desktop's default selection before the user
+ * picks one): each frame resolves it via GET /boards (`current`) before
+ * baseline/cursor classification, so the default board notifies like an
+ * explicitly selected one. Alias resolution is fail-closed too: an
+ * unresolvable alias notifies nothing.
  */
 
 import { host, type PluginOs, type PluginRestOptions, type PluginTranslate } from '@hermes/plugin-sdk'
@@ -111,6 +116,25 @@ async function ensureBaseline(slug: string): Promise<void> {
   }
 }
 
+/** The empty slug ('') is the desktop's alias for "the server's current board".
+ *  Resolve it to the concrete slug via GET /boards so baseline/cursor
+ *  classification runs against a real board (fail-closed on failure). Other
+ *  slugs pass through unchanged. */
+async function resolveAlias(slug: string): Promise<string | null> {
+  if (slug !== '') {
+    return slug
+  }
+
+  try {
+    const listing = (await rest!<{ current?: unknown }>('/boards')) as { current?: unknown }
+    const current = typeof listing.current === 'string' ? listing.current.trim() : ''
+
+    return current || null
+  } catch {
+    return null
+  }
+}
+
 function trimmed(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -185,12 +209,18 @@ function notifyOne(kind: string, spec: { titleKey: string; toast: ToastKind }, e
  *  notification was fired. Never throws: notification failure cannot
  *  interfere with api.ts cache invalidation. */
 export async function onKanbanEventsFrame(slug: string, events?: CompletionEvent[]): Promise<boolean> {
-  if (!events?.length || slug === '' || !rest) {
+  if (!events?.length || !rest) {
     return false
   }
 
-  await ensureBaseline(slug)
-  const seen = seenEventIdByBoard.get(slug)
+  const board = slug === '' ? await resolveAlias(slug) : slug
+
+  if (board === null) {
+    return false
+  } // fail-closed: alias unresolved
+
+  await ensureBaseline(board)
+  const seen = seenEventIdByBoard.get(board)
 
   if (seen === undefined) {
     return false
@@ -205,7 +235,7 @@ export async function onKanbanEventsFrame(slug: string, events?: CompletionEvent
     }
 
     cursor = ev.id
-    seenEventIdByBoard.set(slug, cursor)
+    seenEventIdByBoard.set(board, cursor)
     const spec = TERMINAL_NOTIFY.get(ev.kind ?? '')
 
     if (spec) {
