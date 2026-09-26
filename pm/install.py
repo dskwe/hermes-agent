@@ -672,8 +672,17 @@ def _target_selection(package, fact: dict, *, extras, inputs: dict, repair: bool
         stamp = fact.get("stamp") or package.expected_stamp(enabled, plugin_dirs=[])
         return enabled, stamp, {"repair": True}
     # The first writable generation replaces, rather than layers on,
-    # the payload. Retain its extras until a recorded selection owns them.
-    enabled = sorted(set(_still_declared(package, fact.get("extras", shipped or []))) | set(extras or []))
+    # the payload. Retain its extras until a recorded selection owns them,
+    # and carry what the config already enables (#124228): a Telegram home's
+    # first generation must not be an [all] venv without its SDK.
+    from pm.platform_features import configured_platform_extras
+
+    inputs = dict(inputs)
+    configured = configured_platform_extras()
+    if configured:
+        inputs["configured_platform_extras"] = True
+    enabled = sorted(set(_still_declared(package, fact.get("extras", shipped or [])))
+                     | set(extras or []) | set(configured))
     return enabled, package.expected_stamp(enabled, **inputs), inputs
 
 

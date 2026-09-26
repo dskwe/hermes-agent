@@ -286,8 +286,17 @@ def legacy_selection(project_root: Path) -> list[str]:
     venv's site-packages is read, never imported: the migrating process may
     not run from it.
     """
+    import os
+
     root = Path(project_root)
-    trees = [tree for venv in (root / "venv", root / ".venv")
+    # `$HERMES_HOME/venvs/<name>` is the layout the shipped Windows launchers
+    # assume (hermes_constants.project_venv_dir); a main-era venv that lazily
+    # installed a messaging SDK migrates without it if we scan only the checkout.
+    legacy_dirs = [root / "venv", root / ".venv"]
+    home_venvs = os.environ.get("HERMES_HOME", "").strip()
+    if home_venvs:
+        legacy_dirs.extend(sorted((Path(home_venvs) / "venvs").glob("*")))
+    trees = [tree for venv in legacy_dirs
              for tree in (*venv.glob("lib/python*/site-packages"), venv / "Lib" / "site-packages")
              if tree.is_dir()]
     carried = sorted(

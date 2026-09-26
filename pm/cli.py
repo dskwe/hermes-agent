@@ -319,7 +319,9 @@ def _install_python_environments(extras: list[str], *, sync: bool, test_environm
             # the installers' old `--extra all` did. sync_venv unions, so
             # any lazy extras already recorded survive this; it only makes
             # a fresh bootstrap match what the first update would do.
-            sync_venv(extras or ["all"], explicit=True)
+            from pm.platform_features import add_configured_platform_extras
+
+            sync_venv(add_configured_platform_extras(extras or ["all"]), explicit=True)
             print(f"✓ venv{' +' + ' +'.join(extras) if extras else ''}")
         except InstallError as e:
             print(f"✗ {e}")
