@@ -1449,12 +1449,18 @@ def shared_listener_mirror_platforms(runtime: Optional[dict[str, Any]], profile:
 
 
 def profile_platforms_from_multiplexer(runtime: Optional[dict[str, Any]], profile: str) -> dict[str, Any]:
-    """The ``<profile>:<platform>`` entries of a multiplexer record, re-keyed to bare platform names — the
-    same shape a standalone gateway for ``profile`` writes into its own ``gateway_state.json`` — plus the
-    default listener's api_server/webhook mirrors the profile is served through (``ingress_url`` set)."""
+    """The ``<profile>:<platform>`` entries of a multiplexer record, re-keyed to bare platform names —
+    the same shape a standalone gateway for ``profile`` writes into its own ``gateway_state.json`` —
+    plus the default listener's api_server/webhook mirrors the profile is served through (``ingress_url`` set).
+    A record with NO served roster is a standalone gateway's own record: its bare entries already are
+    the profile's platform map and pass through unchanged — re-keying it found no ``<profile>:`` entries
+    and projected ``{}``, leaving a connected platform on the ``pending_restart`` state forever (#123869)."""
     plats = (runtime or {}).get("platforms")
     if not isinstance(plats, dict):
         return {}
+    served = (runtime or {}).get("served_profiles")
+    if not isinstance(served, list) or not served:
+        return {key: value for key, value in plats.items() if isinstance(value, dict)}
     prefix = f"{profile}:"
     own = {key[len(prefix):]: value for key, value in plats.items()
            if isinstance(key, str) and key.startswith(prefix) and isinstance(value, dict)}
