@@ -235,11 +235,26 @@ class CLIInfoMixin:
 
     def _fast_command_available(self) -> bool:
         try:
-            from hermes_cli.models import model_supports_fast_mode
+            from hermes_cli.models import resolve_fast_mode_overrides
         except Exception:
             return False
         agent = getattr(self, "agent", None)
-        return model_supports_fast_mode(getattr(agent, "model", None) or getattr(self, "model", None))
+        model = getattr(agent, "model", None) or getattr(self, "model", None)
+        # Route-gated, like the request builders and session.info: a fast-capable model id
+        # behind OpenRouter / a proxy / a local server never receives the fast params, so
+        # /fast must not be offered there even though the model id alone looks eligible.
+        provider = getattr(agent, "provider", None) or getattr(self, "provider", None)
+        base_url = getattr(agent, "base_url", None) or getattr(self, "base_url", None)
+        if getattr(agent, "api_mode", None) == "anthropic_messages":
+            base_url = getattr(agent, "_anthropic_base_url", None) or base_url
+        try:
+            if (provider or "").strip().lower() == "auto" and not base_url:
+                # Route unresolved (provider auto): the model id decides, as before.
+                from hermes_cli.models import model_supports_fast_mode
+                return model_supports_fast_mode(model)
+            return resolve_fast_mode_overrides(model, provider=provider, base_url=base_url) is not None
+        except Exception:
+            return False
 
     def _command_available(self, slash_command: str) -> bool:
         if slash_command == "/fast":

@@ -783,13 +783,26 @@ class GatewayModelCommandsMixin:
         """Handle /fast — the CLI Priority Processing toggle; session-scoped unless ``--global``
         (persists agent.service_tier, parity with /model)."""
         from gateway.run import _load_gateway_config, _resolve_gateway_model
-        from hermes_cli.models import model_supports_fast_mode
+        from hermes_cli.models import resolve_fast_mode_overrides
 
         # The /reasoning parser strips --global (any position) and normalizes unicode dashes.
         args, persist_global = self._parse_reasoning_command_args(event.get_command_args().strip().lower())
         session_key = self._session_key_for_source(event.source)
         self._service_tier = self._resolve_session_service_tier(session_key=session_key)
-        if not model_supports_fast_mode(_resolve_gateway_model(_load_gateway_config())):
+        # Gate on the route the turn actually uses (the request builders' own gate): a
+        # fast-capable model id behind OpenRouter, a proxy or a local server never receives
+        # the fast params, so /fast must not be offered there (parity with session.info).
+        _cfg = _load_gateway_config()
+        _model_cfg = _cfg.get("model", {}) if isinstance(_cfg.get("model"), dict) else {}
+        try:
+            _fast_ok = resolve_fast_mode_overrides(
+                _resolve_gateway_model(_cfg),
+                provider=_model_cfg.get("provider"),
+                base_url=_model_cfg.get("base_url"),
+            ) is not None
+        except Exception:
+            _fast_ok = False
+        if not _fast_ok:
             return t("gateway.fast.not_supported")
         if args and args != "status":
             return self._apply_fast_selection(session_key, args, persist=persist_global)
