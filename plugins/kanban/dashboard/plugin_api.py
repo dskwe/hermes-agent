@@ -105,6 +105,21 @@ def _with_board_pinned(board: Optional[str], fn: Callable[[], Any]) -> Any:
     with kanban_db.scoped_current_board(_resolve_board(board) or kanban_db.DEFAULT_BOARD):
         return fn()
 
+@contextmanager
+def _launch_profile_secrets() -> Iterator[None]:
+    """Bind the launch profile's secret scope when this process hosts other profiles (#123372).
+
+    The aux-LLM handlers resolve their provider key through the profile secret scope; under
+    multi-profile hosting an unbound read fails closed with ``UnscopedSecretError`` (post
+    #119279), so Decompose/Specify/Estimate/Describe-auto answered ``LLM error:
+    UnscopedSecretError`` for the launch profile's own cards. Board pinning alone
+    (``_with_board_pinned``) never binds it. ``launch_profile_scope_if_multiplexed`` is the
+    canonical seam for launch-profile work with no routed profile; a no-op before activation.
+    """
+    from tui_gateway.launch_profile_policy import launch_profile_scope_if_multiplexed
+    with launch_profile_scope_if_multiplexed():
+        yield
+
 
 def _require(getter: Callable, conn: sqlite3.Connection, ident, label: str):
     obj = getter(conn, ident)
@@ -118,7 +133,8 @@ def _run_aux(board: Optional[str], module: str, fn: str, task_id: str, author: O
     the module is imported lazily so a missing aux client can't break plugin load."""
     def _run():
         return getattr(importlib.import_module(f"hermes_cli.{module}"), fn)(task_id, author=(author or None))
-    return _with_board_pinned(board, _run)
+    with _launch_profile_secrets():
+        return _with_board_pinned(board, _run)
 
 
 def _require_task(conn: sqlite3.Connection, task_id: str) -> kanban_db.Task:
@@ -1065,49 +1081,50 @@ def _run_estimate(title: str, body: Optional[str], *, task_id: Optional[str]) ->
     """Never raises — config/parse/API errors become ``{"ok": False, "reason"}`` so the UI renders them inline."""
     if not (title or "").strip():
         return {"ok": False, "reason": "a title is required to estimate"}
-    try:
-        from agent.auxiliary_client import call_llm
-    except Exception:
-        return {"ok": False, "reason": "auxiliary client unavailable"}
-    user_msg = f"Title: {_cap(title, 400)}\n\nDescription:\n{_cap(body, 4000) or '(none)'}"
-    # Headless like specify/decompose's _call_aux: without a bound affinity scope the relay-affinity
-    # headers are omitted and the OpenCode Go relay answers 400 MissingSessionID (#112043). The
-    # create dialog has no task yet, so it shares one stable key.
-    from agent.portal_tags import get_affinity_scope, reset_affinity_scope, set_affinity_scope
-    affinity_token = None if get_affinity_scope() else set_affinity_scope(f"kanban:{task_id or 'estimate'}")
-    try:
-        resp = call_llm(
-            task="kanban_estimator",
-            messages=[{"role": "system", "content": _ESTIMATE_SYSTEM_PROMPT}, {"role": "user", "content": user_msg}],
-            temperature=0.0, max_tokens=300, timeout=60)
-    except Exception as exc:
-        return {"ok": False, "reason": f"LLM error: {type(exc).__name__}"}
-    finally:
-        if affinity_token is not None:
-            reset_affinity_scope(affinity_token)
-    try:
-        raw = (resp.choices[0].message.content or "").strip()
-        model = getattr(resp, "model", None)
-    except Exception:
-        raw, model = "", None
+    with _launch_profile_secrets():
+        try:
+            from agent.auxiliary_client import call_llm
+        except Exception:
+            return {"ok": False, "reason": "auxiliary client unavailable"}
+        user_msg = f"Title: {_cap(title, 400)}\n\nDescription:\n{_cap(body, 4000) or '(none)'}"
+        # Headless like specify/decompose's _call_aux: without a bound affinity scope the relay-affinity
+        # headers are omitted and the OpenCode Go relay answers 400 MissingSessionID (#112043). The
+        # create dialog has no task yet, so it shares one stable key.
+        from agent.portal_tags import get_affinity_scope, reset_affinity_scope, set_affinity_scope
+        affinity_token = None if get_affinity_scope() else set_affinity_scope(f"kanban:{task_id or 'estimate'}")
+        try:
+            resp = call_llm(
+                task="kanban_estimator",
+                messages=[{"role": "system", "content": _ESTIMATE_SYSTEM_PROMPT}, {"role": "user", "content": user_msg}],
+                temperature=0.0, max_tokens=300, timeout=60)
+        except Exception as exc:
+            return {"ok": False, "reason": f"LLM error: {type(exc).__name__}"}
+        finally:
+            if affinity_token is not None:
+                reset_affinity_scope(affinity_token)
+        try:
+            raw = (resp.choices[0].message.content or "").strip()
+            model = getattr(resp, "model", None)
+        except Exception:
+            raw, model = "", None
 
-    # Same tolerant JSON-blob extraction the specifier uses.
-    try:
-        m = None if raw.lstrip().startswith("{") else re.search(r"\{.*\}", raw, re.DOTALL)
-        obj = json.loads(m.group(0) if m else raw)
-        parsed = obj if isinstance(obj, dict) else None
-    except Exception:
-        parsed = None
-    if not parsed:
-        return {"ok": False, "reason": "could not parse an estimate from the model"}
-    try:
-        est_tokens = int(parsed.get("est_tokens") or 0)
-    except (TypeError, ValueError):
-        est_tokens = 0
-    complexity = str(parsed.get("complexity") or "").strip().upper()
-    return {
-        "ok": True, "est_tokens": est_tokens, "complexity": complexity if complexity in {"S", "M", "L"} else None,
-        "rationale": str(parsed.get("rationale") or "").strip() or None, "model": model}
+        # Same tolerant JSON-blob extraction the specifier uses.
+        try:
+            m = None if raw.lstrip().startswith("{") else re.search(r"\{.*\}", raw, re.DOTALL)
+            obj = json.loads(m.group(0) if m else raw)
+            parsed = obj if isinstance(obj, dict) else None
+        except Exception:
+            parsed = None
+        if not parsed:
+            return {"ok": False, "reason": "could not parse an estimate from the model"}
+        try:
+            est_tokens = int(parsed.get("est_tokens") or 0)
+        except (TypeError, ValueError):
+            est_tokens = 0
+        complexity = str(parsed.get("complexity") or "").strip().upper()
+        return {
+            "ok": True, "est_tokens": est_tokens, "complexity": complexity if complexity in {"S", "M", "L"} else None,
+            "rationale": str(parsed.get("rationale") or "").strip() or None, "model": model}
 
 
 # --- Plugin config ----------------------------------------------------------
@@ -1561,7 +1578,7 @@ def update_profile_description(profile_name: str, payload: DescribeBody):
 def auto_describe_profile(profile_name: str, payload: DescribeAutoBody):
     """``hermes profile describe <name> --auto``: persist with ``description_auto: true``.
     Non-OK outcomes are NOT HTTP errors — the UI renders the reason inline."""
-    with _errors_to_500("describer crashed"):
+    with _errors_to_500("describer crashed"), _launch_profile_secrets():
         from hermes_cli import profile_describer
         outcome = profile_describer.describe_profile(profile_name, overwrite=bool(payload.overwrite))
     return {"ok": bool(outcome.ok), "profile": outcome.profile_name, "reason": outcome.reason, "description": outcome.description}
