@@ -3316,6 +3316,10 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
             # Shared post-commit stamp site with the in-place commit and micro-compaction sync.
             # See #98450.
             stamp_db_persisted_markers(pruned_msgs)
+            logger.info(
+                "Proactive tool-result prune committed: %d tool result(s) rewritten, "
+                "~%s tokens reclaimed, next rearm at ~%s message tokens",
+                pruned_count, f"{reclaimed:,}", f"{next_rearm_tokens:,}")
         self._proactive_prune_rearm_tokens = next_rearm_tokens
         # Reclamation just ran: let a future lockout warn again.
         self._last_reclaim_block_warn = None

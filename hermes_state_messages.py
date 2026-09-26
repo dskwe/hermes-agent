@@ -61,6 +61,14 @@ _SET_COUNTERS_SQL = "UPDATE sessions SET message_count = ?, tool_call_count = ?"
 _RESET_COUNTERS_SQL = "UPDATE sessions SET message_count = 0, tool_call_count = 0 WHERE id = ?"
 _SET_DISPLAY_META_SQL = "UPDATE messages SET display_metadata = ? WHERE id = ?"
 _ARCHIVE_ACTIVE_SQL = "UPDATE messages SET active = 0, compacted = 1 WHERE session_id = ? AND active = 1"
+# Targeted in-place prune rewrite (#124102): the payload columns a prune commit overlays,
+# updated only on rows whose stored payload differs. The FTS triggers fire on
+# UPDATE OF content, tool_name, tool_calls, role and reindex the row in place; the
+# display-identity trigger covers the same columns, so only genuinely changed rows are
+# re-identified and nothing is re-inserted.
+_UPDATE_MESSAGE_PAYLOAD_SQL = (
+    "UPDATE messages SET role = ?, content = ?, tool_call_id = ?, tool_calls = ?, "
+    "tool_name = ?, api_content = ? WHERE id = ? AND session_id = ?")
 _SHADOWED_CHECKPOINT_ROWS_SQL = ("SELECT id, codex_reasoning_items FROM messages WHERE session_id = ? AND active = 1 "
     "AND role = 'assistant' AND id < ? AND codex_reasoning_items LIKE '%\"compaction\"%'")
 _SET_CODEX_REASONING_SQL = "UPDATE messages SET codex_reasoning_items = ? WHERE id = ?"
@@ -812,6 +820,78 @@ class SessionMessagesMixin:
             (inserted, tool_calls_total, *((patched_model_config,) if patch else ()), session_id))
         return inserted
 
+    def _in_place_prune_rewrite(
+        self, conn, session_id: str, compacted_messages: List[Dict[str, Any]], covered: List[int], *,
+        tail_count: int, carried_messages: Optional[List[Dict[str, Any]]],
+        patched_model_config: Any, patch: bool,
+    ) -> bool:
+        """Commit a prune WITHOUT the full archive-and-reinsert generation (#124102).
+
+        ``_archive_named_rows`` soft-archives every active row and re-inserts the whole
+        transcript, so a prune that demotes a few tool results duplicated every user turn once
+        per commit (54% of one live store's user rows were archive generations) and reset every
+        row id. When the held coverage provably names EVERY active row AND the held dicts map
+        1:1 onto those rows by ``_row_id``, overlay each dict onto its row instead: changed
+        payloads are updated in place (FTS and display triggers index the edit), unchanged rows
+        keep id, timestamp and position, and nothing is archived. Any other shape — carried or
+        tail rewinds, unpersisted turns, merge-carried dicts without row ids — returns False
+        and the caller takes the full-rewrite path. ``model_config_patch`` is already merged.
+        """
+        if tail_count > 0 or carried_messages:
+            return False
+        active_ids = sorted(int(row["id"]) for row in conn.execute(_ACTIVE_IDS_SQL, (session_id,)).fetchall())
+        if sorted({int(row_id) for row_id in covered}) != active_ids:
+            return False
+        if len(compacted_messages) != len(active_ids):
+            return False
+        row_ids: List[int] = []
+        for msg in compacted_messages:
+            row_id = msg.get("_row_id") if isinstance(msg, dict) else None
+            if not isinstance(row_id, int) or isinstance(row_id, bool) or row_id <= 0:
+                return False
+            row_ids.append(row_id)
+        if sorted(set(row_ids)) != active_ids:
+            return False
+        changed = sum(self._overlay_pruned_payload(conn, session_id, row_id, msg)
+                      for msg, row_id in zip(compacted_messages, row_ids))
+        conn.execute(
+            f"{_SET_COUNTERS_SQL}{', model_config = ?' if patch else ''} WHERE id = ?",
+            (len(row_ids),
+             sum(_tool_calls_count(_parse_tool_calls(msg.get("tool_calls"))) for msg in compacted_messages),
+             *((patched_model_config,) if patch else ()), session_id))
+        logger.info("In-place prune commit for session %s: %d of %d rows rewritten, none archived",
+                    session_id, changed, len(row_ids))
+        return True
+
+    def _overlay_pruned_payload(self, conn, session_id: str, row_id: int, message: Dict[str, Any]) -> bool:
+        """Overlay one pruned dict onto its durable active row; True when the payload changed.
+
+        Compares exactly the columns this writer stores, through the same load lens
+        ``_matching_active_ids`` uses; the row's id, timestamp, reasoning sidecars, counters and
+        display metadata survive untouched. The UPDATE fires the FTS update triggers so search
+        sees the summary in place of the old body, and the display-identity trigger
+        re-identifies only rows whose payload genuinely changed.
+        """
+        role = message.get("role", "unknown")
+        content = self._encode_content(self._loaded_view_content(role, message.get("content")))
+        tool_calls = _parse_tool_calls(message.get("tool_calls"))
+        tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+        tool_name = _scrub_surrogates(message.get("tool_name")) if isinstance(message.get("tool_name"), str) else None
+        api_content = _scrub_surrogates(message.get("api_content")) if isinstance(message.get("api_content"), str) else None
+        row = conn.execute(
+            "SELECT role, content, tool_call_id, tool_calls, tool_name, api_content "
+            "FROM messages WHERE id = ? AND session_id = ?", (row_id, session_id)).fetchone()
+        if row is None:
+            return False
+        if (row["role"] == role and row["content"] == content and row["tool_call_id"] == message.get("tool_call_id")
+                and row["tool_calls"] == tool_calls_json and row["tool_name"] == tool_name
+                and row["api_content"] == api_content):
+            return False
+        conn.execute(_UPDATE_MESSAGE_PAYLOAD_SQL,
+            (role, content, message.get("tool_call_id"), tool_calls_json, tool_name, api_content,
+             row_id, session_id))
+        return True
+
     def archive_and_compact(self, session_id: str, compacted_messages: List[Dict[str, Any]],
         model_config_patch: Optional[Dict[str, Any]] = None, watermark: Optional[int] = None,
         lock_holder: Optional[str] = None, tail_count: int = 0,
@@ -824,7 +904,9 @@ class SessionMessagesMixin:
         START): rows ``id > watermark`` arrived during the slow summary and are re-sequenced after the
         compacted set by a pure-SQL clone (fresh ids); ``None`` archives everything. *covered_ids*: the
         rows the compressor actually held. When proved, only those are summarized; every other active
-        row is cloned after the new set, so a gap below the newest held id is not archived unseen.
+        row is cloned after the new set, so a gap below the newest held id is not archived unseen. When the held
+        coverage names every active row (a prune commit), changed payloads are updated in place
+        instead of archived and re-inserted (#124102).
         ``None`` keeps the watermark path. *unresolved_held*: held dicts with no row id, matched inside
         the transaction. *lock_holder*: verified
         in-txn so a reclaimed lease fails instead of clobbering the winner. *tail_count*: the LAST N compacted
@@ -856,6 +938,11 @@ class SessionMessagesMixin:
                 conn, session_id, model_config_patch, on_missing="raise") if patch else None
             proved = self._proved_coverage(conn, session_id, covered_ids, unresolved_held)
             if proved is not None:
+                if self._in_place_prune_rewrite(
+                        conn, session_id, compacted_messages, proved, tail_count=tail_count,
+                        carried_messages=carried_messages,
+                        patched_model_config=patched_model_config, patch=patch):
+                    return len(proved)
                 return self._archive_named_rows(
                     conn, session_id, compacted_messages, proved, tail_count=tail_count,
                     carried_messages=carried_messages, patched_model_config=patched_model_config, patch=patch)
