@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import stat
@@ -2589,3 +2590,127 @@ def test_run_backup_prunes_older_default_named_zips_but_not_others(tmp_path, mon
     kept = sorted(p.name for p in tmp_path.glob("hermes-backup-*.zip"))
     assert len(kept) == 2 and kept[0] == "hermes-backup-2026-01-04-000000.zip"
     assert (tmp_path / "my-archive.zip").exists()
+
+
+# ---------------------------------------------------------------------------
+# Truncated-member salvage (#124564): a source read that dies mid-member must
+# leave no truncated (but CRC-valid) entry in a published backup, and an
+# incomplete automatic backup must not rotate the last good generation out.
+# ---------------------------------------------------------------------------
+
+class _DyingSource:
+    """File-like source that yields ``total`` incompressible bytes, then OSError(5)."""
+
+    def __init__(self, total: int) -> None:
+        self._left = total
+
+    def read(self, size: int = -1) -> bytes:
+        if self._left <= 0:
+            raise OSError(5, "simulated source read failure")
+        want = 65536 if size < 0 else size
+        chunk = os.urandom(min(want, self._left))
+        self._left -= len(chunk)
+        return chunk
+
+
+def _break_backup_write(monkeypatch, failing_member: str, partial_bytes: int = 300000) -> None:
+    """Replace ``ZipFile.write`` so *failing_member* streams ``partial_bytes`` into the real
+    member before raising OSError(5) — a source read that dies after the member opened."""
+    real_write = zipfile.ZipFile.write
+    seen: list[str] = []
+
+    def _patched(self, filename, arcname=None, compress_type=None, compresslevel=None):
+        arc_str = str(arcname if arcname is not None else filename)
+        if arc_str == failing_member and not seen:
+            seen.append(arc_str)
+            with self.open(arc_str, "w") as dest:
+                shutil.copyfileobj(_DyingSource(partial_bytes), dest, 8192)
+        return real_write(self, filename, arcname, compress_type, compresslevel)
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", _patched)
+
+
+def _assert_no_dead_bytes(zip_path: Path) -> None:
+    """The file must be exactly member-data + central directory + EOCD: abandoned local
+    data ahead of the CD wider than the 64 KiB end-record scan window makes archives
+    unreadable for readers that locate the EOCD from the end of the file."""
+    data = zip_path.read_bytes()
+    eocd = data.rfind(b"PK\x05\x06")
+    assert eocd != -1
+    cd_size = struct.unpack("<I", data[eocd + 12:eocd + 16])[0]
+    cd_offset = struct.unpack("<I", data[eocd + 16:eocd + 20])[0]
+    assert cd_offset + cd_size + 22 == len(data), (
+        f"{len(data) - cd_offset - cd_size - 22} dead bytes between member data and central directory")
+
+
+class TestBackupTruncatedMemberSalvage:
+
+    def test_a_failed_entry_leaves_no_truncated_member_in_the_archive(self, tmp_path, monkeypatch):
+        """A source read that dies mid-member must not publish a truncated, CRC-valid entry
+        that a restore could later substitute for the real file (#124564). The failure must
+        write more than 64 KiB so the dead-data trap is actually covered."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        _make_hermes_tree(hermes_home)
+        flaky = hermes_home / "logs" / "flaky.bin"
+        flaky.write_bytes(os.urandom(300000))
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _break_backup_write(monkeypatch, "logs/flaky.bin")
+
+        from hermes_cli.backup import run_backup
+
+        out_zip = tmp_path / "out.zip"
+        assert run_backup(Namespace(output=str(out_zip), keep=0)) is False
+        assert out_zip.exists()
+
+        with zipfile.ZipFile(out_zip, "r") as zf:
+            names = zf.namelist()
+            assert "logs/flaky.bin" not in names, "truncated member must be un-recorded"
+            assert "config.yaml" in names and "logs/agent.log" in names
+            # Earlier and later members survive byte-exact: the archive is a usable salvage.
+            assert zf.read("config.yaml") == (hermes_home / "config.yaml").read_bytes()
+            assert zf.read("logs/agent.log") == (hermes_home / "logs" / "agent.log").read_bytes()
+        _assert_no_dead_bytes(out_zip)
+
+    def test_failed_member_removal_preserves_earlier_duplicate_names(self, tmp_path):
+        """The failed member is un-recorded by header offset: an earlier successful entry
+        with the same name must survive (name-keyed removal would delete the wrong one)."""
+        from hermes_cli.backup import _discard_failed_member
+
+        zip_path = tmp_path / "dup.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            zf.writestr("dup.bin", b"first-good")
+            entry_dir = zf.start_dir
+            with pytest.raises(OSError):
+                with zf.open("dup.bin", "w") as dest:
+                    shutil.copyfileobj(_DyingSource(300000), dest, 8192)
+            _discard_failed_member(zf, entry_dir)
+
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            assert zf.namelist() == ["dup.bin"]
+            assert zf.read("dup.bin") == b"first-good"
+        _assert_no_dead_bytes(zip_path)
+
+    def test_incomplete_auto_backup_does_not_prune_last_good_generation(self, tmp_path, monkeypatch):
+        """An automatic full backup that salvaged a readable-but-partial archive must not
+        count as a complete replacement: the last good generation survives pruning
+        (#124564)."""
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        _make_hermes_tree(hermes_home)
+        (hermes_home / "logs" / "flaky.bin").write_bytes(os.urandom(300000))
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        backup_dir = hermes_home / "backups"
+        backup_dir.mkdir()
+        good = backup_dir / "pre-update-2026-01-01-000000.zip"
+        good.write_bytes(b"PK-good-archive")
+        _break_backup_write(monkeypatch, "logs/flaky.bin")
+
+        from hermes_cli.backup import _create_prefixed_full_backup
+
+        out = _create_prefixed_full_backup(hermes_home, "pre-update-", 1, "pre-update", "backup")
+        assert out is not None, "the salvage archive is still published for partial restores"
+        assert good.exists(), "an incomplete backup must not rotate the last good generation out"

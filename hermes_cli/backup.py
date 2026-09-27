@@ -458,10 +458,39 @@ def _zip_sqlite_snapshot(zf: zipfile.ZipFile, abs_path: Path, rel_path: Path, ou
         tmp_db.unlink(missing_ok=True)
 
 
+def _discard_failed_member(zf: zipfile.ZipFile, entry_dir: int) -> None:
+    """Drop the just-failed member from a writable archive's central directory.
+
+    ``ZipFile`` records the member (``filelist``/``NameToInfo``/``start_dir``) *before* its
+    data lands, so a source read that dies mid-member leaves a truncated, CRC-valid entry
+    behind that a restore could silently substitute for the real file. The caller passes the
+    ``zf.start_dir`` captured immediately before the write: the member is un-recorded only
+    when it was actually recorded (``header_offset == entry_dir``) -- a failure before
+    recording, like a pre-1980 file timestamp, must leave the previous good entry alone.
+    Removal is by position and identity, never by name: earlier same-name entries survive.
+    ``start_dir`` is rewound to the member's header and the file truncated there, dropping
+    the dead local header and partial data too -- rewinding the directory alone leaves the
+    dead bytes past the end record, where readers that locate that record by scanning back
+    from EOF see a broken archive once the junk exceeds the 64 KiB scan window.
+    """
+    filelist = zf.filelist
+    if not filelist or filelist[-1].header_offset != entry_dir:
+        return
+    zinfo = filelist.pop()
+    if zf.NameToInfo.get(zinfo.filename) is zinfo:
+        del zf.NameToInfo[zinfo.filename]
+    zf.start_dir = entry_dir
+    zf.fp.seek(entry_dir)
+    zf.fp.truncate()
+
+
 def _write_zip_entries(
     zf: zipfile.ZipFile, files_to_add: List[Tuple[Path, Path]], out_path: Path,
     *, on_db_failure, on_error, on_progress, track_bytes: bool) -> int:
     """Add every ``(abs_path, rel_path)`` to *zf*, WAL-safe for ``*.db``; return bytes archived.
+
+    A member whose data write fails mid-read is un-recorded from *zf* (see
+    :func:`_discard_failed_member`) so the archive can never publish a truncated entry.
 
     ``on_db_failure(rel_path)`` runs when a SQLite snapshot fails (may raise to abort);
     ``on_error(rel_path, exc)`` records a read failure; ``on_progress(i)`` fires every 500 files;
@@ -469,6 +498,7 @@ def _write_zip_entries(
     """
     total_bytes = 0
     for i, (abs_path, rel_path) in enumerate(files_to_add, 1):
+        entry_dir = zf.start_dir
         try:
             if abs_path.suffix == ".db":
                 size = _zip_sqlite_snapshot(zf, abs_path, rel_path, out_path)
@@ -482,6 +512,7 @@ def _write_zip_entries(
                     total_bytes += abs_path.stat().st_size
         except (PermissionError, OSError, ValueError) as exc:
             on_error(rel_path, exc)
+            _discard_failed_member(zf, entry_dir)
             continue
         if i % 500 == 0:
             on_progress(i)
@@ -599,11 +630,13 @@ def _run_backup_locked(args, hermes_root: Path) -> bool:
         # External memory-provider state never includes ``.db`` files in practice, so a
         # straight zf.write is fine.
         for abs_path, arcname in external_to_add:
+            entry_dir = zf.start_dir
             try:
                 zf.write(abs_path, arcname=arcname)
                 total_bytes += abs_path.stat().st_size
             except (PermissionError, OSError, ValueError) as exc:
                 errors.append(f"{arcname}: {exc}")
+                _discard_failed_member(zf, entry_dir)
     elapsed = time.monotonic() - t0
     zip_size = out_path.stat().st_size
     logger.info("backup phase=archive status=complete duration_ms=%.1f files=%d errors=%d bytes=%d",
@@ -1107,10 +1140,15 @@ def _create_prefixed_full_backup(
         logger.warning("Could not create %s backup dir %s: %s", what, backup_dir, exc)
         return None
     out_path = backup_dir / f"{prefix}{datetime.now().strftime('%Y-%m-%d-%H%M%S')}.zip"
-    if _write_full_zip_backup(out_path, hermes_root) is None:
+    written = _write_full_zip_backup(out_path, hermes_root)
+    if written is None:
         return None
-    _prune_prefixed_zips(backup_dir, prefix, keep, prune_what)
-    return out_path
+    archive_path, complete = written
+    if complete:
+        _prune_prefixed_zips(backup_dir, prefix, keep, prune_what)
+    else:
+        logger.warning("%s backup is incomplete; keeping the last good generation", what)
+    return archive_path
 
 
 def create_pre_update_backup(
@@ -1951,8 +1989,9 @@ def run_quick_backup(args) -> None:
 # Shared full-zip backup helper
 # ---------------------------------------------------------------------------
 
-def _write_full_zip_backup(out_path: Path, hermes_root: Path) -> Optional[Path]:
-    """Single-flight wrapper for automatic full zip backups."""
+def _write_full_zip_backup(out_path: Path, hermes_root: Path) -> Optional[tuple[Path, bool]]:
+    """Single-flight wrapper for automatic full zip backups: ``(path, complete)``, or ``None``
+    when nothing was published."""
     try:
         with _backup_operation_lock(hermes_root):
             return _write_full_zip_backup_locked(out_path, hermes_root)
@@ -1961,7 +2000,7 @@ def _write_full_zip_backup(out_path: Path, hermes_root: Path) -> Optional[Path]:
         return None
 
 
-def _write_full_zip_backup_locked(out_path: Path, hermes_root: Path) -> Optional[Path]:
+def _write_full_zip_backup_locked(out_path: Path, hermes_root: Path) -> Optional[tuple[Path, bool]]:
     scan_started = time.monotonic()
     logger.info("automatic backup phase=scan status=started")
     try:
@@ -1978,23 +2017,38 @@ def _write_full_zip_backup_locked(out_path: Path, hermes_root: Path) -> Optional
         logger.warning("Full-zip backup aborted: SQLite snapshot failed for %s", rel_path)
         raise _SQLiteSnapshotError(str(rel_path))
 
+    failed_members: list[str] = []
+
+    def _read_error(rel_path: Path, exc: Exception) -> None:
+        failed_members.append(str(rel_path))
+        logger.debug("Skipping %s in zip backup: %s", rel_path, exc)
+
     archive_started = time.monotonic()
     try:
         with _atomic_output_path(out_path) as archive_path, zipfile.ZipFile(
                 archive_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             _write_zip_entries(
                 zf, files_to_add, out_path, on_db_failure=_db_failure, track_bytes=False,
-                on_error=lambda rel, exc: logger.debug("Skipping %s in zip backup: %s", rel, exc),
+                on_error=_read_error,
                 on_progress=lambda i: logger.info(
                     "automatic backup phase=archive status=progress completed=%d total=%d", i, len(files_to_add)))
     except (OSError, _SQLiteSnapshotError) as exc:
         # The hidden partial is already gone; ``out_path`` may be a previous valid backup: keep it.
         logger.warning("Full-zip backup: zip write failed: %s", exc)
         return None
+    if failed_members:
+        # The salvage archive is published and readable, but it is not a complete
+        # replacement for the last good generation: report incompleteness so the
+        # caller publishes it without pruning, and nothing treats it as a rollback point.
+        logger.warning(
+            "Full-zip backup incomplete: %d file(s) failed (%s); the partial archive is kept "
+            "but does not replace the last good backup",
+            len(failed_members), ", ".join(failed_members[:5]))
+        return out_path, False
     logger.info("automatic backup phase=archive status=complete duration_ms=%.1f files=%d bytes=%d",
                 (time.monotonic() - archive_started) * 1000, len(files_to_add),
                 out_path.stat().st_size)
-    return out_path
+    return out_path, True
 
 
 # ---------------------------------------------------------------------------
