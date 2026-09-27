@@ -103,13 +103,28 @@ def resolve_store_python(repo_root: Path) -> Path | None:
             packages = json.loads(facts.read_text(encoding="utf-8-sig")).get(
                 "packages", {}
             )
-            entry = (packages.get("python") or {}).get("entry")
+            fact = packages.get("python") or {}
+            entry = fact.get("entry")
         except (OSError, ValueError):
-            entry = None
+            fact, entry = {}, None
         if entry:
             candidate = runtime / entry / rel
             if candidate.is_file():
                 return candidate
+            # Bundles whose interpreter does not sit at <entry>/bin — the
+            # bionic (Termux) .deb extracts under
+            # data/data/com.termux/files/usr — still record their real bin
+            # dir in env.PATH at install time ({{store}}-templated). Resolve
+            # through it, staying inside the recorded entry.
+            entry_root = runtime / entry
+            name = "python.exe" if _is_windows() else "python3"
+            for raw_dir in (fact.get("env") or {}).get("PATH") or []:
+                directory = Path(str(raw_dir).replace("{{store}}", str(runtime)))
+                if not directory.is_relative_to(entry_root):
+                    continue
+                candidate = directory / name
+                if candidate.is_file():
+                    return candidate
 
     return None
 
