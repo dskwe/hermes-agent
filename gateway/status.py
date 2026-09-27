@@ -694,10 +694,43 @@ def looks_like_gateway_runtime_command_line(command: str | None) -> bool:
     return _gateway_command_subcommand(command) in {"run", "restart"}
 
 
+# Final statement of the launcher shim's inline source (hermes_cli._launchers.runtime_command --
+# the ONE publisher of "python -I -c <bootstrap>" Hermes entrypoints). runpy(alter_sys=True)
+# makes the embedded CLI argv the process's sys.argv, so a shim-launched runtime's own identity
+# records carry the tail while its OS command line is the whole -c form.
+_LAUNCHER_BOOTSTRAP_TAIL = (
+    "import hermes_bootstrap; "
+    "runpy.run_module('hermes_cli.main', run_name='__main__', alter_sys=True)"
+)
+
+
+def _shim_gateway_runtime_command_line(command: str | None) -> Optional[str]:
+    """The embedded CLI argv when *command* is a launcher-shim line, else None.
+
+    PM and source installs execute every entrypoint through this shim (issue #124893); the
+    strict -c refusal (#107002) must keep reading the command line as spawn INTENT for
+    discovery, but a live process whose command line carries the published bootstrap's final
+    statement VERBATIM (anchored on this exact case-sensitive literal, never a keyword
+    substring) IS the hermes CLI it execs. Callers must still corroborate with a validated
+    hermes-gateway record before accepting the process."""
+    if not command:
+        return None
+    squashed = " ".join(command.split())
+    end = squashed.rfind(_LAUNCHER_BOOTSTRAP_TAIL)
+    if end == -1:
+        return None
+    return squashed[end + len(_LAUNCHER_BOOTSTRAP_TAIL):].strip() or None
+
+
 def _looks_like_gateway_process(pid: int) -> bool:
     """True when the live PID still looks like the Hermes gateway."""
     cmdline = _read_process_cmdline(pid)
-    return bool(cmdline) and looks_like_gateway_command_line(cmdline)
+    if not cmdline:
+        return False
+    return bool(
+        looks_like_gateway_command_line(cmdline)
+        or _shim_gateway_runtime_command_line(cmdline) is not None
+    )
 
 
 def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
@@ -705,7 +738,11 @@ def _record_looks_like_gateway(record: dict[str, Any]) -> bool:
     argv = record.get("argv")
     if record.get("kind") != _GATEWAY_KIND or not isinstance(argv, list) or not argv:
         return False
-    return looks_like_gateway_runtime_command_line(" ".join(str(part) for part in argv))
+    joined = " ".join(str(part) for part in argv)
+    return bool(
+        looks_like_gateway_runtime_command_line(joined)
+        or _shim_gateway_runtime_command_line(joined) is not None
+    )
 
 
 def _profile_name_for_home(profile_home: Path) -> Optional[str]:
@@ -800,11 +837,21 @@ def _record_matches_live_gateway_pid(
     live_cmdline = _read_process_cmdline(pid)
     if not live_cmdline:
         return _record_looks_like_gateway(record)
-    if not looks_like_gateway_runtime_command_line(live_cmdline):
+    shim_tail = _shim_gateway_runtime_command_line(live_cmdline)
+    if not looks_like_gateway_runtime_command_line(live_cmdline) and shim_tail is None:
         return False
     if expected_home is not None and _host_gateway_serves_home(pid, expected_home):
         return True
-    return expected_home is None or _command_line_belongs_to_profile(live_cmdline, expected_home)
+    if expected_home is not None and not _command_line_belongs_to_profile(
+        shim_tail or live_cmdline, expected_home
+    ):
+        return False
+    # A launcher-shim command line counts only when the record itself vouches for the PID:
+    # the shape is otherwise indistinguishable from any inline-source process, so kind,
+    # argv, and pid must all agree (issue #124893).
+    if shim_tail is not None:
+        return _pid_from_record(record) == pid and _record_looks_like_gateway(record)
+    return True
 
 
 def _build_pid_record() -> dict:
@@ -1847,7 +1894,10 @@ def _validated_scoped_lock_gateway_owner(record: dict[str, Any]) -> Optional[tup
     if _scoped_lock_owner_state(owner_pid, owner_start_time) != "same":
         return None
     live_cmdline = _read_process_cmdline(owner_pid)
-    if live_cmdline is not None and not looks_like_gateway_runtime_command_line(live_cmdline):
+    if live_cmdline is not None and not (
+        looks_like_gateway_runtime_command_line(live_cmdline)
+        or _shim_gateway_runtime_command_line(live_cmdline) is not None
+    ):
         return None
     # The target home's own PID record must corroborate the claim.
     pid_record = _read_json_file(target_home / "gateway.pid") or {}
@@ -2088,13 +2138,22 @@ def get_running_pid_identity_strict(pid_path: Path) -> Optional[tuple[int, float
         return None
     if not _is_gateway_runtime_lock_active_strict(resolved_lock_path):
         return None
-    if not pid_exists:
-        raise RuntimeError("active gateway lock has no PID metadata")
-    records = (_read_pid_record(resolved_pid_path), _read_gateway_lock_record(resolved_lock_path))
-    if not all(records):
-        raise RuntimeError("gateway PID or lock metadata is malformed")
+    lock_record = _read_gateway_lock_record(resolved_lock_path)
+    pid_record = _read_pid_record(resolved_pid_path) if pid_exists else None
+    if pid_record is None and not pid_exists:
+        # Launcher-shim installs persist the lock only (issue #124893): the active lock's own
+        # record (pid/kind/argv/start_time, written by acquire_gateway_runtime_lock) is then
+        # the PID metadata, not a wedge. Identity below is still fully verified: live PID,
+        # start-time agreement, and command-line/record match.
+        if not lock_record or _pid_from_record(lock_record) is None:
+            raise RuntimeError("active gateway lock has no PID metadata")
+        records = (lock_record,)
+    else:
+        if not lock_record or pid_record is None:
+            raise RuntimeError("gateway PID or lock metadata is malformed")
+        records = (pid_record, lock_record)
     pid = _pid_from_record(records[0])
-    if pid is None or pid <= 0 or _pid_from_record(records[1]) != pid:
+    if pid is None or pid <= 0 or _pid_from_record(records[-1]) != pid:
         raise RuntimeError("gateway PID and lock identities disagree")
     if not _pid_exists(pid):
         raise RuntimeError("gateway identity is not live")
