@@ -32,14 +32,41 @@ function authoredMessageCount(messages: ChatMessage[]): number {
 }
 
 /**
+ * Last durable backend row a transcript ends on. Retention (`#77311`) releases
+ * the head of the stored transcript but never the tail — an unpersisted tail
+ * row only ever belongs to the window that is writing it — so two views of the
+ * same chat end on the same row unless one of them is behind. Comparing tips
+ * instead of totals keeps the guard from reading deliberate head-trimming as
+ * "another window is ahead" (#123909: a long tool-heavy chat renders its latest
+ * 120-row page to more messages than the retain budget keeps, so every send
+ * was refused, the refresh was re-trimmed, and the refusal never converged).
+ */
+function durableTipRowId(messages: ChatMessage[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const rowId = messages[i].rowId
+
+    if (rowId !== undefined) {
+      return rowId
+    }
+  }
+
+  // No durable row anywhere (transcript of page-local folds only): tipless.
+  return null
+}
+
+/**
  * Chat messages to install when the authoritative latest page is ahead of the
  * local view. Null when the local view is current.
  *
  * Authored content is compared after `toChatMessages`, so tool rows folded into
  * an assistant bubble are not "ahead", and neither is a backend-authored
- * notice. A backfilled prefix is kept when the refreshed tail anchors inside
- * it. Live stream ids that do not anchor still use the count, so the window
- * that just finished the turn is not blocked when the counts match.
+ * notice. When both sides end on the same durable row the view is current even
+ * if the page holds more rendered messages (the store legitimately holds less
+ * than the page once retention released the head); the count compare then only
+ * decides between views that could not be tip-matched. A backfilled prefix is
+ * kept when the refreshed tail anchors inside it. Live stream ids that do not
+ * anchor still use the count, so the window that just finished the turn is not
+ * blocked when the counts match.
  */
 export function messagesIfTranscriptBehind(
   localMessages: ChatMessage[],
@@ -51,6 +78,12 @@ export function messagesIfTranscriptBehind(
 
   if (localMessages.length === 0) {
     return remoteChat
+  }
+
+  const localTip = durableTipRowId(localMessages)
+
+  if (localTip !== null && localTip === durableTipRowId(remoteChat)) {
+    return null
   }
 
   const grafted = graftRefreshedTailOntoBackfill(remoteChat, localMessages)

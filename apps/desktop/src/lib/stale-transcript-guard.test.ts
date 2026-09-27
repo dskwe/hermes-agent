@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { SessionMessage } from '@/types/hermes'
 
-import { toChatMessages } from './chat-messages'
+import type { ChatMessage } from './chat-messages'
+import { textPart, toChatMessages } from './chat-messages'
 import { messagesIfTranscriptBehind } from './stale-transcript-guard'
 
 /**
@@ -19,6 +20,12 @@ import { messagesIfTranscriptBehind } from './stale-transcript-guard'
  * reported "This window was behind another view of the same chat" to a user who
  * had only switched models, refused the send, and said the same thing on every
  * retry. Staleness must be measured in AUTHORED content, not array length.
+ *
+ * A retained (head-trimmed) store also holds FEWER messages than the page
+ * without anything being behind (#123909): transcript retention (#77311)
+ * releases the head of the stored transcript, so a long tool-heavy chat renders
+ * its latest 120-row page to more messages than the store keeps. There the
+ * durable tip row decides: same last persisted row on both sides = current.
  */
 
 const row = (over: Partial<SessionMessage> & Pick<SessionMessage, 'role'>): SessionMessage => ({
@@ -42,6 +49,18 @@ const modelSwitchNotice = (id: number): SessionMessage =>
     role: 'user',
     timestamp: 1_700_000_000 + id
   })
+
+/**
+ * A store row the retention pass kept: rendered content without a durable
+ * `rowId`, because it was hydrated from an older page the store no longer
+ * holds the backend rows of.
+ */
+const retainedRow = (id: string, role: ChatMessage['role'], text: string): ChatMessage =>
+  ({
+    id,
+    parts: [textPart(text)],
+    role
+  }) as ChatMessage
 
 describe('messagesIfTranscriptBehind', () => {
   it('does not treat a backend-authored notice as another view being ahead', () => {
@@ -91,5 +110,52 @@ describe('messagesIfTranscriptBehind', () => {
 
     expect(messagesIfTranscriptBehind(toChatMessages(rows), [])).toBeNull()
     expect(messagesIfTranscriptBehind([], toChatMessages(rows))).toEqual(toChatMessages(rows))
+  })
+
+  it('does not read retention head-trimming as another window being ahead (#123909)', () => {
+    // A long tool-heavy chat: the store legitimately holds fewer messages than
+    // the latest page renders to, because retention released the head. The
+    // durable tip is the same row on both sides — nothing is behind.
+    const stored: ChatMessage[] = [
+      retainedRow('old-1', 'user', 'morning ask'),
+      retainedRow('old-2', 'assistant', 'morning answer'),
+      ...toChatMessages([userTurn(9, 'latest ask'), assistantTurn(10, 'latest answer')])
+    ]
+    const page = toChatMessages([
+      userTurn(1, 'morning ask'),
+      assistantTurn(2, 'morning answer'),
+      userTurn(9, 'latest ask'),
+      assistantTurn(10, 'latest answer')
+    ])
+
+    // The length compare this regression pins: the page renders to more.
+    expect(stored.length).toBeLessThan(page.length)
+
+    expect(messagesIfTranscriptBehind(stored, page)).toBeNull()
+  })
+
+  it('still refuses when another window advanced the chat past the shared tip', () => {
+    const stored = toChatMessages([userTurn(1, 'ask'), assistantTurn(2, 'answer')])
+    const page = toChatMessages([
+      userTurn(1, 'ask'),
+      assistantTurn(2, 'answer'),
+      userTurn(3, 'sent from another window')
+    ])
+
+    expect(messagesIfTranscriptBehind(stored, page)).not.toBeNull()
+  })
+
+  it('still counts when the stored transcript has no durable row to tip on', () => {
+    const stored: ChatMessage[] = [
+      retainedRow('old-1', 'user', 'old ask'),
+      retainedRow('old-2', 'assistant', 'old answer')
+    ]
+    const page = toChatMessages([
+      userTurn(1, 'old ask'),
+      assistantTurn(2, 'old answer'),
+      userTurn(3, 'never seen here')
+    ])
+
+    expect(messagesIfTranscriptBehind(stored, page)).not.toBeNull()
   })
 })
