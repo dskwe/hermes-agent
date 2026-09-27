@@ -7,6 +7,7 @@ test patches on ``update_cmd`` stay effective).
 
 import logging
 from contextlib import suppress
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -250,6 +251,29 @@ def _mark_skip_upstream_prompt():
         (get_hermes_home() / SKIP_UPSTREAM_PROMPT_FILE).touch()
 
 
+def _upstream_git_run(cmd: list[str], cwd: Path) -> None:
+    """Run a network fetch/pull for the fork-upstream sync with the updater's isolation.
+
+    Mirrors ``update_cmd._git_run(network=True)``: own process group on POSIX and a
+    300 s bound; ``TimeoutExpired`` is re-raised so the caller's failure branch
+    reports the skip. Without the group, a partial-clone promisor fetch chain nested
+    under these children survives the timeout (#124794).
+    """
+    from hermes_cli.update_cmd import NETWORK_GIT_TIMEOUT_SECONDS, _bounded_kill_git_run, _no_prompt_git_kwargs
+    popen_kwargs = _no_prompt_git_kwargs()
+    if os.name != "nt":
+        popen_kwargs["process_group"] = 0
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace", **popen_kwargs)
+    try:
+        proc.communicate(timeout=NETWORK_GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _bounded_kill_git_run(proc)
+        with suppress(Exception):
+            proc.communicate(timeout=1)
+        raise
+
+
 def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
     """Push updated main to origin (sync fork); True on success."""
     return _git_ok(git_cmd, ["push", "origin", "main", "--force-with-lease"], cwd, network=True)
@@ -303,8 +327,8 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path, *, assume_yes: 
         return False
     print("\n→ Fetching upstream...")
     try:
-        subprocess.run(git_cmd + ["fetch", "upstream", "main", "--quiet"], cwd=cwd, capture_output=True, check=True, **_no_prompt_git_kwargs())
-    except subprocess.CalledProcessError:
+        _upstream_git_run(git_cmd + ["fetch", "upstream", "main", "--quiet"], cwd)
+    except subprocess.SubprocessError:
         print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
         return False
     origin_ahead = _count_commits_between(git_cmd, cwd, "upstream/main", "origin/main")
@@ -324,8 +348,8 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path, *, assume_yes: 
         return True
     print(f"\n→ Fork is {upstream_ahead} commit(s) behind upstream\n→ Pulling from upstream...")
     try:
-        subprocess.run(git_cmd + ["pull", "--ff-only", "upstream", "main"], cwd=cwd, check=True, **_no_prompt_git_kwargs())
-    except subprocess.CalledProcessError:
+        _upstream_git_run(git_cmd + ["pull", "--ff-only", "upstream", "main"], cwd)
+    except subprocess.SubprocessError:
         print("  ✗ Failed to pull from upstream. You may need to resolve conflicts manually.")
         return False
     print("  ✓ Updated from upstream\n→ Syncing fork...")

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+from hermes_cli._subprocess_compat import NO_LAZY_FETCH_ENV
 from hermes_cli.config import get_hermes_home  # noqa: F401  (re-exported; patched via update_cmd)
 from hermes_cli import update_handoff as _update_handoff
 from hermes_cli.update_cmd_common import _best_effort
@@ -175,10 +176,16 @@ def _no_prompt_git_kwargs() -> dict:
     prompt so the fetch fails fast into ``_classify_fetch_failure``. Only the
     *prompt* is disabled — a configured credential helper / askpass still
     runs, so a private-fork origin keeps authenticating non-interactively.
+
+    ``GIT_NO_LAZY_FETCH`` stops a treeless/blobless partial clone from
+    spawning promisor ``git fetch`` children mid-command (#124794); it is
+    honored from git 2.44 and silently ignored by older git, so it layers on
+    top of — never replaces — the process-group/timeout isolation below.
     """
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GCM_INTERACTIVE"] = "Never"
+    env.update(NO_LAZY_FETCH_ENV)
     return {"stdin": subprocess.DEVNULL, "env": env}
 
 
@@ -230,24 +237,70 @@ def _record_pre_update_backup_outcome(args, snapshot_id) -> None:
 
 
 
+def _bounded_kill_git_run(proc) -> None:
+    """Whole-tree reap for a timed-out updater network git child.
+
+    A treeless/blobless partial clone's promisor fetch recursion spawns one nested
+    ``git fetch`` per level under the timed-out child; killing only the direct child
+    leaves the chain running (#124794: 2,922 git processes, swap exhaustion, the
+    gateway's platform adapter dead). ``kill_process_tree`` signals the process group
+    when — and only when — the child leads one, so a fallback spawn sharing our group
+    can never take unrelated processes down.
+    """
+    try:
+        from hermes_cli._subprocess_compat import kill_process_tree
+        kill_process_tree(proc)
+    except Exception:
+        with suppress(Exception):
+            proc.kill()
+
+
 def _git_run(git_cmd, args, cwd=None, *, check=False, network=False):
     """Run git capturing utf-8 text (default cwd: checkout); ``network=True`` disables the
-    terminal prompt so an HTTP 401 fails fast instead of hanging, and bounds the wait."""
-    try:
+    terminal prompt so an HTTP 401 fails fast instead of hanging, and bounds the wait.
+
+    A network call owns its ``Popen`` and runs in its own process group on POSIX
+    (``process_group=0``), so when the bound fires :func:`_bounded_kill_git_run` reaps
+    the whole spawned tree instead of orphaning the promisor fetch chain (#124794).
+    Local git keeps the plain ``subprocess.run`` path: no prompts to hit, no network
+    to stall, nothing spawns beneath it.
+    """
+    full_cmd = git_cmd + args
+    if not network:
         return subprocess.run(
-            git_cmd + args, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", check=check,
-            **({"timeout": NETWORK_GIT_TIMEOUT_SECONDS, **_no_prompt_git_kwargs()} if network else {}))
-    except subprocess.TimeoutExpired as exc:
-        # subprocess.run already killed the child; the checkout stays consistent because
-        # fetch writes to tmp_pack_* and only renames on success. Report as a failed run
-        # so every caller's existing stderr path prints one clear line.
+            full_cmd, cwd=_m().PROJECT_ROOT if cwd is None else cwd, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", check=check)
+    popen_kwargs = _no_prompt_git_kwargs()
+    if os.name != "nt":
+        popen_kwargs["process_group"] = 0
+    proc = subprocess.Popen(
+        full_cmd, cwd=_m().PROJECT_ROOT if cwd is None else cwd,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", **popen_kwargs)
+    try:
+        stdout, stderr = proc.communicate(timeout=NETWORK_GIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        # Reap the whole spawned tree before reporting: a treeless partial clone's
+        # promisor fetch chain nests one `git fetch` per level under this child and
+        # survives a single-child kill. The checkout stays consistent because fetch
+        # writes to tmp_pack_* and only renames on success. Report as a failed run so
+        # every caller's existing stderr path prints one clear line.
+        _bounded_kill_git_run(proc)
+        with suppress(Exception):
+            proc.communicate(timeout=1)
+        # The verb sits after "git" whether the caller passed it via args or git_cmd.
+        verb = full_cmd[1] if len(full_cmd) > 1 else "git"
         result = subprocess.CompletedProcess(
-            exc.cmd, 124, stdout="",
-            stderr=f"git {args[0]} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s with no response from the remote")
+            full_cmd, 124, stdout="",
+            stderr=f"git {verb} timed out after {NETWORK_GIT_TIMEOUT_SECONDS}s with no response from the remote")
         if check:
-            raise subprocess.CalledProcessError(124, exc.cmd, output="", stderr=result.stderr) from exc
+            raise subprocess.CalledProcessError(124, full_cmd, output="", stderr=result.stderr) from None
         return result
+    result = subprocess.CompletedProcess(full_cmd, proc.returncode, stdout, stderr)
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout,
+                                            stderr=result.stderr)
+    return result
 
 
 def _capture_head_sha(git_cmd, cwd) -> str | None:

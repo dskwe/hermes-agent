@@ -139,11 +139,17 @@ def test_update_and_upstream_network_calls_disable_terminal_prompts(monkeypatch,
                         lambda git, cwd, base, head: 2 if head == "upstream/main" else 0)
     calls = []
 
-    def run(cmd, **kwargs):
-        calls.append((cmd[1:], kwargs))
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+    class _OkProc:
+        def __init__(self, cmd, **kwargs):
+            self.args = cmd
+            self.pid = 424242
+            self.returncode = 0
+            calls.append((cmd[1:], kwargs))
 
-    monkeypatch.setattr(subprocess, "run", run)
+        def communicate(self, timeout=None):
+            return ("", "")
+
+    monkeypatch.setattr(subprocess, "Popen", _OkProc)
     update_cmd._git_run(["git"], ["fetch", "origin", "main"], cwd=tmp_path, network=True, check=True)
     assert update_cmd_git._sync_with_upstream_if_needed(["git"], tmp_path, assume_yes=True)
     assert [args[0] for args, _ in calls] == ["fetch", "fetch", "pull", "push"]
