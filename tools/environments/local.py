@@ -635,19 +635,66 @@ def _user_local_bin_entries() -> list[str]:
         return []
 
 
+def _dependency_venv_bin_dir() -> str | None:
+    """Bin dir of the dependency venv this install committed (``pm`` runtime
+    facts), or ``None`` when no dependency environment is recorded.
+
+    That venv is the interpreter contract for everything Hermes runs: it is
+    where the application's third-party dependencies (PyYAML, ruamel, …) are
+    installed. The PM store's tool Python is a bare interpreter with none of
+    them (#125040).
+    """
+    try:
+        from pm.environments import committed_venv, venv_bin_dir
+
+        environment = committed_venv(_hermes_repo_root)
+        if environment is None:
+            return None
+        bin_dir = venv_bin_dir(environment)
+        return str(bin_dir) if bin_dir.is_dir() else None
+    except Exception:
+        # Unreadable/invalid dependency records must never break PATH building.
+        return None
+
+
+def _dependency_venv_first(ordered: dict, managed: list[str]) -> list[str]:
+    """Order the Hermes-managed entries so the dependency venv's bin precedes
+    every PM store tool dir.
+
+    ``pm.install.activate()`` prepends the store's tool dirs to the process
+    PATH — store-first by design — and lazy activation can do so at any point
+    after boot, landing the bare store tool Python ahead of the dependency
+    venv's bin that ``activate_dependencies`` prepended earlier. A terminal
+    ``python3`` then resolves the bare interpreter (``sys.prefix ==
+    sys.base_prefix``) and every skill script importing a third-party module
+    fails with ModuleNotFoundError although the dependency venv carries it
+    (#125040). Within the Hermes-managed set the dependency venv wins; user
+    entries earlier in PATH keep their precedence untouched.
+    """
+    venv_bin = _dependency_venv_bin_dir()
+    managed_present = [d for d in managed if d in ordered]
+    if not venv_bin or not managed_present:
+        return list(ordered)
+    entries = [e for e in ordered if e != venv_bin]
+    entries.insert(min(entries.index(d) for d in managed_present), venv_bin)
+    return entries
+
+
 def _append_missing_sane_path_entries(existing_path: str) -> str:
     """Normalised POSIX PATH with missing sane entries appended: empty entries
     dropped (shells read them as cwd), duplicates collapsed (first wins), then
     missing ``_SANE_PATH`` / managed-runtime / ``~/.local/bin`` dirs appended so
-    user entries keep precedence. Windows is a no-op passthrough (native ``;``
-    PATH untouched)."""
+    user entries keep precedence. The dependency venv's bin is additionally
+    ordered ahead of the managed runtime dirs (see ``_dependency_venv_first``).
+    Windows is a no-op passthrough (native ``;`` PATH untouched)."""
     if _IS_WINDOWS:
         return existing_path
     # dict preserves first-occurrence order; empty entries dropped.
     ordered = dict.fromkeys(entry for entry in existing_path.split(":") if entry)
-    ordered.update(dict.fromkeys([*_SANE_PATH.split(":"), *_managed_runtime_path_entries(),
+    managed = _managed_runtime_path_entries()
+    ordered.update(dict.fromkeys([*_SANE_PATH.split(":"), *managed,
                                   *_user_local_bin_entries()]))
-    return ":".join(ordered)
+    return ":".join(_dependency_venv_first(ordered, managed))
 
 
 def _apply_windows_msys_bash_env_defaults(env: dict) -> None:
