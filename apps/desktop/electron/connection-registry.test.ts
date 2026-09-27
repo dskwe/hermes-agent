@@ -959,6 +959,19 @@ test('shouldRetrySshInventory: first try, cooldown, then retry; cache never retr
   assert.equal(shouldRetrySshInventory(true, 1_000, 120_000, 60_000), false)
 })
 
+test('shouldRetrySshInventory: consecutive failures back off exponentially up to the cap', () => {
+  // One failure retries after the base interval, as before…
+  assert.equal(shouldRetrySshInventory(false, 1_000, 61_000, 60_000, 1), true)
+  // …but a second consecutive failure doubles the window: not yet at 61s.
+  assert.equal(shouldRetrySshInventory(false, 1_000, 61_000, 60_000, 2), false)
+  assert.equal(shouldRetrySshInventory(false, 1_000, 121_000, 60_000, 2), true)
+  // The ladder saturates at the cap: a host without Hermes dials ~48 times a
+  // day instead of ~1440, no matter how long the failure streak grows.
+  assert.equal(shouldRetrySshInventory(false, 0, 29 * 60_000, 60_000, 8), false)
+  assert.equal(shouldRetrySshInventory(false, 0, 30 * 60_000, 60_000, 8), true)
+  assert.equal(shouldRetrySshInventory(false, 0, 30 * 60_000, 60_000, 99), true)
+})
+
 test('parseRemoteProfileListing: Mini/Spark dirs become roster names and drop rollbacks', () => {
   const listed = parseRemoteProfileListing(
     ['bob', 'dixie', 'goose', 'rambo', 'bob.rollback-old', '.hidden', '', 'not a name'].join('\n')

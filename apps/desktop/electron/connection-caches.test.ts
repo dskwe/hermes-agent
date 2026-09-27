@@ -7,6 +7,7 @@ import {
   evictConnectionCaches,
   rosterSourceErrors,
   sshInventoryAttemptedAt,
+  sshInventoryFailureCount,
   sshRosterCache
 } from './connection-caches'
 import { shouldRetrySshInventory } from './connection-registry'
@@ -14,6 +15,7 @@ import { shouldRetrySshInventory } from './connection-registry'
 beforeEach(() => {
   sshRosterCache.clear()
   sshInventoryAttemptedAt.clear()
+  sshInventoryFailureCount.clear()
   connectionInstallIds.clear()
   rosterSourceErrors.clear()
 })
@@ -59,6 +61,19 @@ test('an evicted id enumerates from the live target again instead of serving the
     shouldRetrySshInventory(sshRosterCache.has('mac-mini'), sshInventoryAttemptedAt.get('mac-mini'), Date.now()),
     true
   )
+})
+
+test('inventory failure streaks are connection-scoped: eviction clears them', () => {
+  // A backoff streak must not follow a recycled/re-pointed id onto its next
+  // machine: eviction forgets it like every other connection-scoped cache.
+  seed('mac-mini')
+  sshInventoryFailureCount.set('mac-mini', 5)
+  sshInventoryFailureCount.set('spark', 2)
+
+  evictConnectionCaches('mac-mini')
+
+  assert.equal(sshInventoryFailureCount.has('mac-mini'), false)
+  assert.equal(sshInventoryFailureCount.get('spark'), 2)
 })
 
 test('evicting an unknown or empty id is a no-op', () => {

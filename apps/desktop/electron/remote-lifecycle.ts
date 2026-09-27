@@ -424,7 +424,14 @@ function assertSafeRemoteHome(home) {
   const value = String(home || '').trim()
 
   if (!/^(\/|~\/)[A-Za-z0-9._/+-]+$/.test(value) || value.includes('..')) {
-    const error: any = new Error('Unsafe remote Hermes home.')
+    // The value is what came back from the remote (a leaked/odd client env, an
+    // OpenSSH banner, an empty echo) — name it so the log line answers "why",
+    // instead of a bare "Unsafe" the user must reverse-engineer (#118988,
+    // #124618). Capped and stripped so a hostile value cannot flood the log.
+    const shown = value.replace(/[^\x20-\x7e]/g, '?').slice(0, 200)
+    const error: any = new Error(
+      `Unsafe remote Hermes home: ${shown ? `"${shown}"` : '(empty)'}`
+    )
     error.kind = 'unsafe-path'
     throw error
   }

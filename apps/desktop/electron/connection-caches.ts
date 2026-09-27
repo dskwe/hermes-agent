@@ -27,9 +27,14 @@ export const connectionInstallIds = new Map<string, { id?: string; ts: number }>
 /** Last logged roster failure per connection, so repeat polls do not spam the log. */
 export const rosterSourceErrors = new Map<string, string>()
 
+/** Consecutive ssh inventory failures per connection. Grows the retry backoff
+ *  in `shouldRetrySshInventory`; an inventoried success clears the entry. */
+export const sshInventoryFailureCount = new Map<string, number>()
+
 const CONNECTION_SCOPED_CACHES: Map<string, unknown>[] = [
   sshRosterCache,
   sshInventoryAttemptedAt,
+  sshInventoryFailureCount,
   connectionInstallIds,
   rosterSourceErrors
 ]

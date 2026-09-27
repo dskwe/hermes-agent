@@ -124,6 +124,7 @@ import {
   evictConnectionCaches,
   rosterSourceErrors,
   sshInventoryAttemptedAt,
+  sshInventoryFailureCount,
   sshRosterCache
 } from './connection-caches'
 import {
@@ -15845,6 +15846,7 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
 
     if (result?.reachable) {
       sshInventoryAttemptedAt.delete(entry.id)
+      sshInventoryFailureCount.delete(entry.id)
       sshRosterCache.delete(entry.id)
       await probeSshProfileInventory(entry)
     }
@@ -15923,6 +15925,10 @@ ipcMain.handle('hermes:connections:test', async (_event, id) => {
 // each is keyed by connection id and is only valid while that id names the same machine, so
 // removing a connection or re-pointing it must evict them (`evictConnectionCaches`).
 const SSH_INVENTORY_RETRY_MS = 60_000
+// Consecutive inventory failures back off exponentially up to this cap, so a
+// saved connection whose remote lost its Hermes install dials ~48 times a day
+// instead of ~1440 (#124618). Any success (or the user hitting Test) resets.
+const SSH_INVENTORY_RETRY_CAP_MS = 30 * 60_000
 
 // Stable backend identity per registered connection: the `install_id` its
 // /api/status reports (absent on backends older than the field). Enumeration
@@ -15972,7 +15978,8 @@ async function probeSshProfileInventory(connection) {
       sshRosterCache.has(connection.id),
       sshInventoryAttemptedAt.get(connection.id),
       Date.now(),
-      SSH_INVENTORY_RETRY_MS
+      SSH_INVENTORY_RETRY_MS,
+      sshInventoryFailureCount.get(connection.id) ?? 0
     )
   ) {
     return
@@ -16013,8 +16020,21 @@ async function probeSshProfileInventory(connection) {
       id: await remoteLifecycle.readRemoteInstallId(ssh),
       ts: Date.now()
     })
+
+    // The full probe succeeded: this connection is healthy again, so the next
+    // failure starts the backoff ladder from one attempt, not on top of the
+    // old streak.
+    sshInventoryFailureCount.delete(connection.id)
   } catch (error: any) {
-    sshRememberLog(`[ssh] profile inventory failed for ${connection.id}: ${error?.message || error}`)
+    const attempt = (sshInventoryFailureCount.get(connection.id) ?? 0) + 1
+    sshInventoryFailureCount.set(connection.id, attempt)
+    sshRememberLog(
+      `[ssh] profile inventory failed for ${connection.id} ` +
+        `(attempt ${attempt}, next retry in ${Math.min(
+          (SSH_INVENTORY_RETRY_MS * 2 ** (attempt - 1)) / 1000,
+          SSH_INVENTORY_RETRY_CAP_MS / 1000
+        )}s): ${error?.message || error}`
+    )
   } finally {
     try {
       await ssh.close()

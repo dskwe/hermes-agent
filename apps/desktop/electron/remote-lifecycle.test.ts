@@ -298,6 +298,23 @@ test('listRemoteHermesProfiles inventories Mini-style profile dirs without spawn
   )
 })
 
+test('unsafe remote Hermes home errors name the offending value', async () => {
+  // The rejection is only actionable if the log says WHAT came back from the
+  // remote (a leaked env, a banner, an empty echo); a bare "Unsafe" forced
+  // users to reverse-engineer it (#118988, #124618).
+  const ssh = fakeSsh([[/HERMES_HOME/, '/tmp/x; echo pwned\n']])
+
+  await assert.rejects(
+    () => listRemoteHermesProfiles(ssh),
+    (err: any) => {
+      assert.equal(err.kind, 'unsafe-path')
+      assert.match(err.message, /\/tmp\/x; echo pwned/)
+
+      return true
+    }
+  )
+})
+
 test('listRemoteHermesProfiles rejects a hostile HERMES_HOME', async () => {
   const ssh = fakeSsh([[/HERMES_HOME/, '/tmp/x; echo pwned\n']])
 
