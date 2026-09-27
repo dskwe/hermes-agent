@@ -635,19 +635,48 @@ def _user_local_bin_entries() -> list[str]:
         return []
 
 
+def _active_dependency_venv_bin() -> str | None:
+    """Bin dir of the dependency venv this process selected at bootstrap
+    (``pm.environments.activate_dependencies`` prepends it to the process
+    PATH), when that dir exists on disk.
+
+    Terminal children must resolve ``python3`` to THIS interpreter: the pm
+    store's standalone tool Python is a bare interpreter (``sys.prefix ==
+    sys.base_prefix``) without Hermes' installed dependencies, so a skill
+    script doing ``python3 script.py`` failed on ``import yaml`` even though
+    PyYAML lives in the dependency venv (#125040)."""
+    try:
+        from pm.environments import selected_venv, venv_bin_dir
+        from pm.paths import repo_root
+
+        bin_dir = venv_bin_dir(selected_venv(repo_root()))
+        return str(bin_dir) if bin_dir.is_dir() else None
+    except Exception:
+        return None
+
+
 def _append_missing_sane_path_entries(existing_path: str) -> str:
     """Normalised POSIX PATH with missing sane entries appended: empty entries
     dropped (shells read them as cwd), duplicates collapsed (first wins), then
     missing ``_SANE_PATH`` / managed-runtime / ``~/.local/bin`` dirs appended so
-    user entries keep precedence. Windows is a no-op passthrough (native ``;``
-    PATH untouched)."""
+    user entries keep precedence. The active dependency venv's bin is then moved
+    ahead of the managed runtime dirs (store activation is store-first and would
+    otherwise shadow the dependency interpreter with the bare tool Python,
+    #125040). Windows is a no-op passthrough (native ``;`` PATH untouched)."""
     if _IS_WINDOWS:
         return existing_path
     # dict preserves first-occurrence order; empty entries dropped.
     ordered = dict.fromkeys(entry for entry in existing_path.split(":") if entry)
-    ordered.update(dict.fromkeys([*_SANE_PATH.split(":"), *_managed_runtime_path_entries(),
-                                  *_user_local_bin_entries()]))
-    return ":".join(ordered)
+    managed = _managed_runtime_path_entries()
+    ordered.update(dict.fromkeys([*_SANE_PATH.split(":"), *managed, *_user_local_bin_entries()]))
+    entries = list(ordered)
+    venv_bin = _active_dependency_venv_bin()
+    if venv_bin and managed:
+        rest = [entry for entry in entries if entry != venv_bin]
+        first_managed = next((i for i, entry in enumerate(rest) if entry in managed), 0)
+        rest.insert(first_managed, venv_bin)
+        entries = rest
+    return ":".join(entries)
 
 
 def _apply_windows_msys_bash_env_defaults(env: dict) -> None:
