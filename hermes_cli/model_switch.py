@@ -357,7 +357,8 @@ class StartupModelRoute(NamedTuple):
 def resolve_startup_model_route(
     raw_model: str, *, explicit_provider: str = "", current_provider: str = "",
     user_providers: Optional[dict] = None,
-    custom_providers: Optional[list] = None) -> Optional[StartupModelRoute]:
+    custom_providers: Optional[list] = None,
+    from_config_default: bool = False) -> Optional[StartupModelRoute]:
     """Resolve aliases, ``provider:model`` and configured ``provider/model`` input at startup.
 
     ``HermesCLI`` is constructed before the interactive ``/model`` pipeline runs; resolving here
@@ -365,7 +366,12 @@ def resolve_startup_model_route(
     model. ``provider/model`` strings are consumed only for providers present in user config. When
     ``current_provider`` is a routing aggregator and the raw string is an aggregator-native slug
     (``anthropic/claude-opus-4.6`` on OpenRouter) the input stays on the aggregator — a
-    ``providers:`` block for the same vendor must not steal the route."""
+    ``providers:`` block for the same vendor must not steal the route.
+
+    When ``from_config_default`` marks the string as the config's ``model.default`` (not a
+    user-typed ``-m`` argument) and ``current_provider`` is an explicit non-auto pin, a colon
+    prefix that merely aliases a registry provider is a vendor namespace, not a provider
+    selection — the pin survives and the string stays whole for runtime resolution (#125578)."""
     raw = _clean(raw_model)
     if not raw:
         return None
@@ -400,6 +406,18 @@ def resolve_startup_model_route(
                       for entry in (custom_providers or []) if isinstance(entry, dict) and _clean(entry.get("name")))
     qualified_provider, qualified_model = parse_model_input(raw, "", custom_ids=custom_ids)
     if qualified_provider:
+        # A config-default model carrying a vendor-namespace prefix (``hf:`` and friends) must
+        # not steal the route from an explicitly pinned provider: the pin (``custom:<name>`` or a
+        # registry id from ``model.provider``) outranks a prefix that merely aliases a registry
+        # provider. Keep the string whole — endpoints can REQUIRE the prefix verbatim in the
+        # model field — and let the pinned provider's runtime resolution see it (#125578).
+        # Qualified ``custom:<name>:<model>`` input stays a real selection (#73943), and a
+        # user-typed ``-m`` keeps its old meaning.
+        _pin = str(current_provider or "").strip().lower()
+        if (from_config_default and _pin and _pin not in ("", "auto")
+                and qualified_provider not in custom_ids
+                and qualified_provider != _pin):
+            return None
         return StartupModelRoute(model=qualified_model, provider=qualified_provider)
     if "/" not in raw:
         return None

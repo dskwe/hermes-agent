@@ -128,6 +128,10 @@ class CLIInitMixin:
                 current_provider=(provider or _nested_provider or _cfg_provider or ""),
                 user_providers=CLI_CONFIG.get("providers"),
                 custom_providers=CLI_CONFIG.get("custom_providers"),
+                # A vendor-namespace prefix on the config default (``hf:`` before a named-custom
+                # pin) must not reroute the session — only a user-typed ``-m`` selects a provider
+                # by prefix (#125578).
+                from_config_default=not model,
             )
             if _startup_route is not None:
                 self.model = _startup_route.model
