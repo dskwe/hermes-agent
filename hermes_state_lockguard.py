@@ -82,6 +82,15 @@ _LOCK = threading.Lock()
 _HANDLES: Dict[Identity, int] = {}
 
 
+class WalGuardArmedIncompleteError(RuntimeError):
+    """hold(strict=True) could not arm every guard range on a runtime that supports OFD locks.
+
+    Raised by the state writer's open path (#125184): a partially-armed guard leaves the WAL
+    generation exposed to exactly the deleted-sidecar split-brain this module exists to prevent,
+    and the failure used to surface as nothing at all (EAGAIN) or a DEBUG line (other OSError).
+    """
+
+
 def supported() -> bool:
     return _F_OFD_SETLK is not None
 
@@ -143,11 +152,17 @@ def _guard_ranges(db_path) -> Held:
     return ranges
 
 
-def hold(db_path, held: Optional[Held] = None) -> Held:
+def hold(db_path, held: Optional[Held] = None, *, strict: bool = False) -> Held:
     """Lock the guard ranges on every descriptor this process has open on ``state.db`` and its
     ``-shm``. Returns the record :func:`release` needs; pass it back to extend an existing one
     (a ``-shm`` minted after open, a reopened connection). Idempotent per handle: an inode already
-    in *held* is re-locked (cheap, covers a new descriptor) without a second handle count."""
+    in *held* is re-locked (cheap, covers a new descriptor) without a second handle count.
+
+    A refused or failed lock used to leave the range silently unguarded: EAGAIN was caught
+    inside ``_ofd_lock`` and any other OSError logged at DEBUG only (#125184). The post-loop
+    completeness check below closes both paths — on a runtime that supports OFD locks, a gap
+    between the requested ranges and *held* now logs at WARNING, and with ``strict=True``
+    raises ``WalGuardArmedIncompleteError`` instead of returning a partially-armed record."""
     held = {} if held is None else held
     if not supported():
         return held
@@ -161,6 +176,20 @@ def hold(db_path, held: Optional[Held] = None) -> Held:
                     _HANDLES[ident] = _HANDLES.get(ident, 0) + 1
     except OSError:
         logger.debug("WAL lock guard unavailable for %s", os.fspath(db_path), exc_info=True)
+    missing = [ident for ident in ranges if ident not in held]
+    if missing:
+        logger.warning(
+            "WAL lock guard armed incompletely for %s: %d of %d ranges guarded "
+            "(refused or failed OFD lock; the WAL generation is NOT protected)",
+            os.fspath(db_path), len(ranges) - len(missing), len(ranges),
+        )
+        if strict:
+            raise WalGuardArmedIncompleteError(
+                f"WAL lock guard could not arm {len(missing)} of {len(ranges)} ranges for "
+                f"{os.fspath(db_path)} — refusing to run an unguarded state writer on a "
+                "runtime that supports OFD locks (set HERMES_STATE_WAL_GUARD_BYPASS=1 "
+                "to proceed degraded)"
+            )
     return held
 
 
