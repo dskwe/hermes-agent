@@ -220,6 +220,13 @@ def extract_tar(archive: Path | IO[bytes], dest: Path, *, git_msys: bool = False
     """
     import tarfile
 
+    from pm._tar_compat import patch_tarfile
+
+    # CPython 3.11.0-3.11.3 ship no extraction-filter API (no ``filter=``
+    # kwarg, no data_filter/FilterError/TarInfo.replace); patch_tarfile
+    # layers it on, no-op on 3.11.4+ and distro-backported 3.10s.
+    patch_tarfile(tarfile)
+
     dest.mkdir(parents=True, exist_ok=True)
     real_dest = os.path.realpath(dest)
     opened = tarfile.open(archive) if isinstance(archive, (str, os.PathLike)) else tarfile.open(fileobj=archive)
