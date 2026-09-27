@@ -6,6 +6,7 @@ import json
 import logging
 import urllib.request
 
+from agent.reasoning_effort import OPENAI_COMPAT_WIRE_EFFORTS, clamp_effort
 from hermes_cli.urllib_security import open_credentialed_url
 from providers import get_provider_profile, register_provider
 from providers.base import ProviderProfile, _profile_user_agent
@@ -14,6 +15,19 @@ logger = logging.getLogger(__name__)
 
 _COMMANDCODE_BASE = "https://api.commandcode.ai/provider/v1"
 _COMMANDCODE_MODELS_URL = f"{_COMMANDCODE_BASE}/models"
+
+
+def _openai_compat_reasoning_wire(reasoning_config: dict | None) -> dict:
+    """Top-level ``reasoning_effort`` for an OpenAI-compatible relay — the shared
+    ``custom``-profile semantics: disabled/``none`` -> ``"none"``, a graded level
+    clamped onto the OpenAI-compat wire, unset -> omit (server default applies)."""
+    if reasoning_config and isinstance(reasoning_config, dict):
+        effort = (reasoning_config.get("effort") or "").strip().lower()
+        if effort == "none" or reasoning_config.get("enabled", True) is False:
+            return {"reasoning_effort": "none"}
+        if effort:
+            return {"reasoning_effort": clamp_effort(effort, OPENAI_COMPAT_WIRE_EFFORTS)}
+    return {}
 
 
 class CommandCodeProfile(ProviderProfile):
@@ -39,16 +53,31 @@ class CommandCodeProfile(ProviderProfile):
             return None
 
 
+    def supported_reasoning_efforts(self, model: str | None) -> tuple[str, ...] | None:
+        """The widest OpenAI-compat vocabulary, mirroring this profile's wire clamp.
+
+        The relay honors top-level ``reasoning_effort`` for every family (live-verified,
+        #125628); without this declaration the entry clamp falls back to the Codex
+        per-model ladder where ``max`` is gpt-5.6-only, so a configured ``max`` was
+        demoted to ``xhigh`` while the wire still carried nothing (#114249 pattern).
+        DeepSeek ids take the native DeepSeek controls instead, which already accept
+        the graded levels this declaration permits.
+        """
+        return OPENAI_COMPAT_WIRE_EFFORTS
+
     def build_api_kwargs_extras(
         self, *, reasoning_config: dict | None = None, model: str | None = None, **context
     ) -> tuple[dict, dict]:
         """DeepSeek ids (``deepseek/deepseek-v4-flash``) get the native DeepSeek wire
         controls: DeepSeek V4+ defaults to thinking when ``thinking`` is omitted, so
-        without them ``/reasoning`` never reaches the request (#95232). Other model
-        families stay a no-op — CommandCode declares no reasoning vocabulary for them."""
+        without them ``/reasoning`` never reaches the request (#95232). Every other
+        family takes the standard OpenAI-compatible top-level ``reasoning_effort``:
+        the relay accepts and grades it for all families (live-verified, #125628 —
+        ``max`` roughly doubles reasoning tokens vs. the server default), so the old
+        blanket no-op silently dropped ``/reasoning`` for them."""
         m = (model or "").strip()
         if not m.lower().startswith("deepseek/"):
-            return {}, {}
+            return {}, _openai_compat_reasoning_wire(reasoning_config)
         # Registry lookup, not a module import: the deepseek shim is only a loader-injected
         # sys.modules entry, and the registry honours a user override of the profile.
         native = get_provider_profile("deepseek")
