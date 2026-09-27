@@ -38,6 +38,9 @@ describe('resolveTargetSessionId', () => {
     expect(requestGateway).toHaveBeenCalledWith('session.resume', {
       session_id: STORED,
       source: 'desktop',
+      // Tip-only: deep compression lineages can exceed max_resume_messages
+      // when the full transcript is requested (#125041).
+      omit_messages: true,
       profile: 'work'
     })
   })

@@ -334,13 +334,19 @@ async def search_sessions(
 
             tip_cache: dict = {}
 
-            def lineage_tip(root_id: str) -> str:
-                if root_id not in tip_cache:
+            def lineage_tip(hit_id: str) -> str:
+                # Walk FORWARD from the hit id itself — the same direction
+                # ``session.resume``'s tip-follow takes. Walking from the
+                # lineage root instead crossed the whole ancestry and truncated
+                # deep chains (>100 compression edges) at
+                # ``get_compression_chain``'s defensive cap, surfacing a
+                # mid-lineage id that Desktop then failed to resume (#125041).
+                if hit_id not in tip_cache:
                     try:
-                        tip_cache[root_id] = db.get_compression_tip(root_id) or root_id
+                        tip_cache[hit_id] = db.get_compression_tip(hit_id) or hit_id
                     except Exception:
-                        tip_cache[root_id] = root_id
-                return tip_cache[root_id]
+                        tip_cache[hit_id] = hit_id
+                return tip_cache[hit_id]
 
             # One keyspace for id-hits and content-hits, keyed by lineage root;
             # first hit wins, and ID matches run first.
@@ -353,7 +359,12 @@ async def search_sessions(
                 if root in seen or len(seen) >= safe_limit:
                     return
                 payload = dict(payload)
-                sid = lineage_tip(root)
+                # Remap from the HIT id, not the root: the contract is that
+                # ``session_id`` is the live tip of the conversation the hit
+                # belongs to. Deriving it from the root made deep lineages
+                # (root >100 compression edges behind the hit) land on a
+                # stale intermediate id (#125041).
+                sid = lineage_tip(raw_sid)
                 payload["session_id"] = sid
                 payload["lineage_root"] = root
                 payload["profile"] = row_profile

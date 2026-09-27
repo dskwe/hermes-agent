@@ -104,6 +104,10 @@ export async function resolveTargetSessionId(deps: ResolveTargetSessionDeps): Pr
         return requestGateway<{ session_id?: string }>('session.resume', {
           session_id: storedTarget,
           source: 'desktop',
+          // Tip-only guard: a deep compression lineage can exceed
+          // max_resume_messages in full form; the canonical resume in
+          // use-session-actions sends omit_messages too (#125041).
+          omit_messages: true,
           ...(profile ? { profile } : {})
         })
       })
