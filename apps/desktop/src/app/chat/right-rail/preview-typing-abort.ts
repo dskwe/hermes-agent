@@ -37,7 +37,14 @@ export function abortPreviewTyping(requestId: string, reason = 'interrupted'): v
 }
 
 /** Drop the controller once the action has settled, so a late cancel is a no-op
- *  rather than aborting a controller the next action might reuse. */
-export function releasePreviewTyping(requestId: string): void {
-  controllers.delete(requestId)
+ *  rather than aborting a controller the next action might reuse.
+ *
+ *  The `signal` must be the one this action armed: a replayed request replaces
+ *  the controller mid-flight (see `trackPreviewTyping`), and the superseded
+ *  handler's cleanup must not release the replacement — otherwise a later
+ *  cancel finds no controller and the replay keeps typing. */
+export function releasePreviewTyping(requestId: string, signal: AbortSignal): void {
+  if (controllers.get(requestId)?.signal === signal) {
+    controllers.delete(requestId)
+  }
 }
