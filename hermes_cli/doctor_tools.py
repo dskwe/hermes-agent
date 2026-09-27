@@ -126,17 +126,44 @@ def _doctor_web_capability_rows() -> list[tuple[str, str, str]]:
         _ensure_web_plugins_loaded()
     except Exception:
         return rows
-    for capability, getter in (("web search", get_active_search_provider), ("web extract", get_active_extract_provider)):
+    from agent.web_search_registry import _configured_backend
+
+    def _not_ready_detail(name: str, capability: str) -> str:
+        # ddgs is keyless — there is nothing to "configure"; its only gate is package
+        # importability in the runtime python. When it is that gate which is down, the
+        # generic "provider not configured" wording is a false positive that hides the
+        # real failure mode: search silently served by the keyless free tier (#125556).
+        if "ddgs" in (name, _configured_backend(capability)):
+            from tools.web_tools import _ddgs_package_importable
+            if not _ddgs_package_importable():
+                return ("(ddgs selected; ddgs package not importable in the runtime python — "
+                        "search silently served by the keyless free tier; install with: pip install ddgs)")
+        return f"({name} selected; provider not configured)"
+
+    for capability, getter in (("search", get_active_search_provider), ("extract", get_active_extract_provider)):
         try:
             provider = getter()
         except Exception:
             provider = None
+        label = "web search" if capability == "search" else "web extract"
         if provider is None:
-            rows.append(("warn", capability, "(no provider selected or registered)"))
+            # A configured backend that resolved to no registered provider means either a
+            # typo'd name or a bundled web plugin that failed to import (e.g. its SDK is
+            # missing from the runtime python, #125556's tavily-without-httpx case) — name
+            # the configured backend instead of hiding it behind a generic row. The managed
+            # "nous" selection is serviced through the tool gateway, not a registered
+            # provider, so it keeps the generic wording.
+            from tools.tool_backend_helpers import NOUS_MANAGED_PROVIDER
+
+            configured = _configured_backend(capability)
+            named = configured and configured != NOUS_MANAGED_PROVIDER
+            rows.append(("warn", label, f"({configured} selected; no registered provider — check the backend "
+                                        "name or a failed web plugin import, e.g. a missing runtime dependency)"
+                         if named else "(no provider selected or registered)"))
             continue
         name = getattr(provider, "name", None) or type(provider).__name__
-        rows.append(("ok", capability, f"({name})") if _provider_is_ready(provider)
-                    else ("warn", capability, f"({name} selected; provider not configured)"))
+        rows.append(("ok", label, f"({name})") if _provider_is_ready(provider)
+                    else ("warn", label, _not_ready_detail(name, capability)))
     return rows
 
 
