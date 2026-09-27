@@ -2473,6 +2473,64 @@ def _module_hermes_argv() -> list[str]:
     return [sys.executable, "-m", "hermes_cli.main"]
 
 
+def _hermes_module_form_probe_fails(
+    interpreter: str, env: Mapping[str, str], cwd: Optional[str] = None
+) -> bool:
+    """True when a FRESH ``interpreter`` cannot import ``hermes_cli`` under *env*.
+
+    The parent's ``importlib.util.find_spec`` answer is not evidence about a
+    child process: launchers seed ``sys.path`` in-process (and the dispatcher's
+    child env deliberately strips Hermes-owned PYTHONPATH entries), so the only
+    faithful check is a real import against the env — and working directory —
+    the child will receive (``-c`` puts the cwd on the child's ``sys.path``).
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603 -- fixed argv, no shell
+            [interpreter, "-c", "import hermes_cli"],
+            env=dict(env),
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=15,
+        )
+    except Exception:
+        # Unreachable or unusable interpreter: treat as failing so the caller
+        # falls through to the repo-root injection (harmless if redundant).
+        return True
+    return proc.returncode != 0
+
+
+def _ensure_child_module_form_importable(
+    cmd: list[str], env: dict, cwd: Optional[str] = None
+) -> None:
+    """Keep the module-form worker argv bootable under the stripped child env (#125121).
+
+    ``_resolve_hermes_argv`` picks ``[sys.executable, "-m", "hermes_cli.main"]``
+    whenever the PARENT can import ``hermes_cli``. On managed-runtime installs
+    that importability comes from the launcher shim's explicit ``sys.path``
+    seeding of the repo root — state that lives nowhere in the environment.
+    ``build_subprocess_env`` then strips Hermes-owned PYTHONPATH entries from
+    the child (correctly, against cross-version C-extension leakage), so the
+    bare managed interpreter is handed a ``-m`` invocation it cannot resolve
+    and every worker dies with ``ModuleNotFoundError`` before ``main()`` runs.
+
+    Probe the child's exact env; when the import genuinely fails, prepend the
+    RUNNING repo root (the same entry the launcher shim itself inserts —
+    provenance is this file's own location, never PATH) so the worker boots
+    with exactly the import surface of the process that spawned it. Healthy
+    layouts (pip-install-e venvs, where the module form is self-sufficient)
+    are left byte-for-byte untouched.
+    """
+    target = [sys.executable, "-m", "hermes_cli.main"]
+    if not any(cmd[i:i + 3] == target for i in range(max(len(cmd) - 2, 0))):
+        return  # PATH-shim / $HERMES_BIN forms carry their own imports
+    if not _hermes_module_form_probe_fails(sys.executable, env, cwd=cwd):
+        return
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{existing}" if existing else repo_root
+
+
 def _absolute_hermes_path(path: str) -> str:
     """Return an absolute filesystem path for a resolved Hermes shim."""
     expanded = os.path.expanduser(path)
@@ -2896,6 +2954,14 @@ def _default_spawn(task: Task, workspace: str, *, board: Optional[str] = None) -
     env.pop("HERMES_TUI", None)
 
     cmd = _worker_argv(task, profile_arg, env.get("HERMES_HOME"))
+    # The module-form argv must survive the stripped child env (#125121):
+    # on managed-runtime installs the bare store interpreter cannot import
+    # hermes_cli once Hermes-owned PYTHONPATH entries are stripped, so
+    # re-inject the running repo root only when a real child-env probe fails.
+    # The probe mirrors the spawn below: cwd=workspace when it is a directory.
+    _ensure_child_module_form_importable(
+        cmd, env, cwd=workspace if os.path.isdir(workspace) else None
+    )
     # A worker spawned by a managed systemd gateway must leave the gateway's
     # cgroup before startup; otherwise restarting the service kills the worker
     # that is performing the handoff.
