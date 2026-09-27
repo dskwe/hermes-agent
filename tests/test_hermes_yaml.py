@@ -74,6 +74,24 @@ def test_native_yaml11_scalars_and_duplicate_key_policy():
     assert merged["local"]["enabled"] is False
 
 
+def test_legacy_pyyaml_string_typed_scalars_do_not_become_floats():
+    # Pre-migration configs were written by PyYAML, whose float resolver requires a '.' in
+    # the mantissa: underscored hex-ish session IDs were plain strings on disk. ruamel's
+    # YAML 1.1 resolver reads them as floats and the lossy re-save corrupts them (#124901).
+    legacy = "ui_meta:\n  hermes-bots:\n    chat: 20260820_093237_089e44\n"
+    for load in (yaml.safe_load, fast_safe_load, yaml.roundtrip_yaml().load):
+        assert load(legacy) == {"ui_meta": {"hermes-bots": {"chat": "20260820_093237_089e44"}}}
+        assert load("v: 1.5e10") == {"v": "1.5e10"}  # unsigned exponent: str for PyYAML too
+    # A read-modify-write keeps the pointer intact and re-quotes it on disk.
+    data = yaml.safe_load(legacy)
+    text = yaml.safe_dump(data, sort_keys=False)
+    assert "'20260820_093237_089e44'" in text
+    assert yaml.safe_load(text) == data
+    # Floats this writer emits keep loading as floats (config round-trip stays lossless).
+    for value in (1e-05, 1e17, 0.25, 2.5e-10, 3.14e2):
+        assert yaml.safe_load(yaml.safe_dump({"v": value})) == {"v": value}
+
+
 def test_parallel_calls_do_not_share_parser_or_emitter_state():
     def roundtrip(index):
         data = {"index": index, "words": ["yes", "no", "on", "off", "y", "n"]}

@@ -5,6 +5,7 @@ Every operation owns its parser/emitter; instances must not be shared by threads
 """
 
 from io import StringIO
+import re
 from typing import Any, IO, overload
 
 from ruamel.yaml import YAML
@@ -19,9 +20,42 @@ class _Yaml11Resolver(VersionedResolver):
         return (1, 1)
 
 
+# PyYAML's float resolver (which wrote every pre-migration config) requires a '.' in the
+# mantissa; ruamel's YAML 1.1 table additionally accepts dot-less ``20260820_093237_089e44``
+# plain scalars as floats. Values PyYAML typed as strings were therefore written unquoted,
+# now load as floats, and the lossy float round-trip corrupts them on the next save
+# (#124901). Demote such scalars back to strings on load — a plain scalar stays a float
+# only when PyYAML's resolver also accepts it, or when it has the exact shape
+# ``repr(float)`` emits (``1e+17``/``1e-05``: dot-less, no underscores, signed exponent),
+# which is the only dot-less float form the current writer puts in files unquoted.
+_PYYAML_FLOAT = re.compile(
+    r"""^(?:[-+]?(?:[0-9][0-9_]*)\.[0-9_]*(?:[eE][-+][0-9]+)?
+        |\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?
+        |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*
+        |[-+]?\.(?:inf|Inf|INF)
+        |\.(?:nan|NaN|NAN))$""",
+    re.X,
+)
+_REPR_FLOAT = re.compile(r"^[-+]?[0-9]e[-+][0-9]+$")
+
+
+class _PyyamlFloatResolver(_Yaml11Resolver):
+    # Load-side only policy; emitting keeps _Yaml11Resolver so ambiguous strings stay quoted.
+    def resolve(self, kind: Any, value: Any, implicit: Any) -> Any:
+        tag = super().resolve(kind, value, implicit)
+        if (
+            tag == "tag:yaml.org,2002:float"
+            and not _PYYAML_FLOAT.match(value)
+            and not _REPR_FLOAT.match(value)
+        ):
+            return self.DEFAULT_SCALAR_TAG
+        return tag
+
+
 def _load(document: str | bytes, *, pure: bool) -> Any:
     yaml = YAML(typ="safe", pure=pure)
     yaml.version = (1, 1)
+    yaml.Resolver = _PyyamlFloatResolver
     return yaml.load(document)
 
 
@@ -90,7 +124,7 @@ def roundtrip_yaml() -> YAML:
     """Create a fresh comment/quote-preserving editor for user-authored YAML."""
     yaml = YAML(typ="rt")
     yaml.width = ROUNDTRIP_YAML_WIDTH
-    yaml.Resolver = _Yaml11Resolver
+    yaml.Resolver = _PyyamlFloatResolver
     yaml.preserve_quotes = True
     yaml.allow_unicode = True
     yaml.default_flow_style = False
