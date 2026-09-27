@@ -405,6 +405,20 @@ def auth_add_command(args) -> None:
     except auth_mod.AuthError as exc:
         # A denied / mismatched / timed-out OAuth login is a user-facing outcome, not a crash.
         raise SystemExit(f"Login failed: {auth_mod.format_auth_error(exc)}") from exc
+    # ``auth add`` reporting success while the credential silently vanished from
+    # every store loses a fresh OAuth grant (its login also revokes any earlier
+    # grant for the same account) — #125501. Re-read the pool from disk and fail
+    # loudly instead of trusting the in-memory pool's success print above.
+    persisted_rows = auth_mod.read_credential_pool(provider)
+    if entry is not None and not any(
+        isinstance(row, dict) and row.get("id") == entry.id for row in persisted_rows
+    ):
+        raise SystemExit(
+            f"`auth add {provider}` reported success, but the credential "
+            f"(id {entry.id}) is absent from every store on re-read — nothing was "
+            "saved. This is a bug; the fresh login may have revoked an earlier "
+            "grant for the same account. Please report it."
+        )
     if wanted_priority is not None:
         placed_pool = load_pool(provider)
         moved = placed_pool.move_entry(entry.id, int(wanted_priority))

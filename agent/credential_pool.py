@@ -820,7 +820,7 @@ def _write_through_provider_state_to_global_root(
 
 def _singleton_target_for_entry(pool: "CredentialPool", entry: "PooledCredential") -> Optional[Path]:
     """Root ``.anthropic_oauth.json`` when *entry* is a borrowed hermes_pkce row, else None."""
-    if entry.source != "hermes_pkce" or entry.id not in getattr(pool, "_borrowed_root_ids", ()):
+    if entry.source != "hermes_pkce" or entry.id not in (getattr(pool, "_borrowed_root_ids", None) or ()):
         return None
     try:
         from agent.anthropic_credentials import _root_hermes_oauth_file
@@ -1004,7 +1004,11 @@ class CredentialPool(CredentialPoolAdminMixin, CredentialPoolModelCooldownMixin)
         self._current_id: Optional[str] = None
         # Ids of rows read via the global-root fallback (single-use OAuth
         # providers only); set by load_pool(), consumed by add_entry().
-        self._borrowed_root_ids: Set[str] = set()
+        # ``None`` (not an empty set) means "not participating in the fallback";
+        # load_pool() sets a set — possibly EMPTY when the borrowing profile's
+        # root had no rows yet (#125501) — for every non-owning single-use
+        # profile load.
+        self._borrowed_root_ids: Optional[Set[str]] = None
         self._persisted_token_pairs: Dict[str, Tuple[Any, Any]] = {}
         self._strategy = get_pool_strategy(provider)
         # RLock: _replace_entry/_persist self-acquire it so the DEFERRED
@@ -3043,7 +3047,10 @@ def load_pool(provider: str) -> CredentialPool:
         # before the clone-strip / root write-through existed (#100339).
         auth_mod.heal_forked_single_use_oauth_grants(provider)
     raw_entries = read_credential_pool(provider)
-    disk_ids = {e.get("id") for e in raw_entries if isinstance(e, dict) and e.get("id")}
+    disk_ids: Set[str] = set()
+    for payload in raw_entries:
+        if isinstance(payload, dict) and (pid := payload.get("id")):
+            disk_ids.add(pid)
     # Ownership (auth.json read) after the heal above; re-read at the tail only if _persist() ran.
     owns_provider: Optional[bool] = None
     changed = any(
@@ -3101,7 +3108,6 @@ def load_pool(provider: str) -> CredentialPool:
         pool._persist(removed_ids=sorted(disk_ids - {entry.id for entry in entries}))
     # Remember the root's borrowed rows so a later ``add_entry`` in this
     # profile leaves them out of the profile's own store (#100339).
-    # No disk rows -> nothing borrowed; the ``set()`` default already applies.
     if provider in SINGLE_USE_REFRESH_POOL_PROVIDERS and disk_ids:
         # Reuse the pre-persist ownership answer unless _persist() just rewrote
         # the store (it can give the profile its own rows); nothing else between
@@ -3110,4 +3116,13 @@ def load_pool(provider: str) -> CredentialPool:
             owns_provider = _profile_owns_pool_provider(provider)
         if not owns_provider:
             pool._borrowed_root_ids = set(disk_ids)
+    elif provider in SINGLE_USE_REFRESH_POOL_PROVIDERS:
+        # No root rows AND this profile owns none of its own: the load went
+        # through the global-root fallback with nothing to borrow. Mark it so
+        # ``auth add`` in this profile still claims profile-local ownership
+        # instead of write-through silently discarding the new credential
+        # (#125501). An empty set is meaningful here — distinguish it from the
+        # ``None`` default ("not participating").
+        if not _profile_owns_pool_provider(provider):
+            pool._borrowed_root_ids = set()
     return pool

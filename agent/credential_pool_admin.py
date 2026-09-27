@@ -115,12 +115,18 @@ class CredentialPoolAdminMixin:
             entry = replace(entry, priority=_next_priority(self._entries))
             self._entries.append(entry)
             borrowed_ids = getattr(self, "_borrowed_root_ids", None)
-            if borrowed_ids:
+            if borrowed_ids is not None:
                 # ``hermes -p <profile> auth add <single-use provider>``: the
                 # profile claims its OWN credential. Persist only profile-owned
                 # rows — copying the borrowed root grant alongside would fork
                 # its single-use refresh token (#100339). Once the profile owns
                 # rows, the root fallback for this provider is shadowed.
+                # The set may legitimately be EMPTY when the borrowing
+                # profile's root had no rows for this provider yet; an
+                # explicit ``auth add`` must still persist profile-locally —
+                # the write-through path is UPDATE-ONLY and would silently
+                # discard the fresh credential (#125501).
+                borrowed_ids = set(borrowed_ids)
                 self._entries = [e for e in self._entries if e.id not in borrowed_ids]
                 written = write_credential_pool(
                     self.provider, [e.to_dict() for e in self._entries],

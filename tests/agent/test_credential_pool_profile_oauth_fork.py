@@ -367,6 +367,36 @@ def test_profile_auth_add_owns_only_its_own_rows(fleet):
     assert [e["id"] for e in fleet["rows"](fleet["root"])] == ["abc123"]
 
 
+def test_profile_auth_add_persists_when_root_has_no_rows(fleet):
+    """#125501: a borrowing profile with NO root rows for the provider must
+    still persist ``auth add`` profile-locally — the write-through path is
+    UPDATE-ONLY and silently discarded the fresh credential."""
+    from agent.credential_pool import AUTH_TYPE_OAUTH, PooledCredential, load_pool
+
+    root = fleet["root"]
+    store = json.loads((root / "auth.json").read_text())
+    del store["credential_pool"]["anthropic"]  # root now has zero anthropic rows
+    (root / "auth.json").write_text(json.dumps(store))
+    fleet["use"](root)
+    assert fleet["rows"](root) is None
+
+    kid = _profile(fleet, "kid")
+    fleet["use"](kid)
+    pool = load_pool("anthropic")
+    assert pool._borrowed_root_ids == set(), "empty fallback must mark participation, not None"
+    pool.add_entry(PooledCredential(
+        provider="anthropic", id="own001", label="mine", auth_type=AUTH_TYPE_OAUTH,
+        priority=0, source="manual:hermes_pkce", access_token="***",
+        refresh_token="rt-mine",
+    ))
+    assert [e["id"] for e in fleet["rows"](kid)] == ["own001"], "fresh credential was silently discarded"
+    assert fleet["rows"](root) is None, "profile add materialized rows in the root store"
+    # A reload from disk keeps the row (profile-owned now shadows the fallback).
+    fleet["use"](kid)
+    reloaded = load_pool("anthropic")
+    assert [e.id for e in reloaded.entries()] == ["own001"]
+
+
 def test_classic_mode_persist_is_unchanged(fleet):
     from agent.credential_pool import load_pool
 
