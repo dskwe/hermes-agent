@@ -70,6 +70,16 @@ def test_exec_schtasks_round_trips_non_ascii_task_argument_live(monkeypatch):
         ["schtasks", "/Create", "/F", "/TN", task, "/SC", "ONLOGON", "/TR", f'wscript.exe //B "C:\\{marker}\\x.vbs"'],
         capture_output=True, timeout=30,
     )
+    if created.returncode != 0:
+        # A non-elevated shell is routinely denied task creation ("ERROR: Access is denied.") — that is
+        # an environment limit, not a regression of the #116193 guard this test protects, so skip the
+        # live round-trip instead of failing it (mirrors _can_symlink in test_worktree_security.py).
+        # schtasks stderr is OEM/ANSI-encoded like every other schtasks stream: reuse the production
+        # decode instead of assuming the raw ACP. Creation is attempted first, not skipped up front,
+        # so hosts whose policy allows non-elevated creation keep the coverage.
+        detail = gateway_windows._decode_schtasks_output(created.stderr or b"")
+        if gateway_windows._is_access_denied(detail):
+            pytest.skip("schtasks /Create is denied for this user; the live round-trip needs elevation")
     assert created.returncode == 0, created.stderr
     try:
         code, out, _err = gateway_windows._exec_schtasks(["/Query", "/TN", task, "/XML"])
