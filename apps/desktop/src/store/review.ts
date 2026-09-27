@@ -5,6 +5,7 @@ import { PANE_TOGGLE_REVEAL_EVENT } from '@/components/pane-shell'
 import { isPaneVisible, revealTreePane } from '@/components/pane-shell/tree/store'
 import type { HermesReviewFile, HermesReviewShipInfo } from '@/global'
 import { matchesQuery } from '@/hooks/use-media-query'
+import { translateNow } from '@/i18n'
 import { desktopGit } from '@/lib/desktop-git'
 import { isExcludedPath } from '@/lib/excluded-paths'
 import { requestOneShot } from '@/lib/oneshot'
@@ -15,6 +16,8 @@ import { refreshRepoStatus, repoStatusForCwd } from './coding-status'
 import { stampSessionPrBranch } from './pull-requests'
 import { $busy, $currentCwd, $selectedStoredSessionId, $sessions } from './session'
 import { $workspaceChangeTick } from './workspace-events'
+import { notify } from './notifications'
+import { revealFile } from './file-actions'
 
 // State for the review pane: the working-tree changed-file list, the selected
 // file's diff, and the git mutations (stage / unstage / revert). The active
@@ -365,6 +368,12 @@ function matchReviewFile(files: readonly HermesReviewFile[], path: string): Herm
 /**
  * Open the review pane on one file's diff. The path comes from a tool call, so
  * it may be absolute while git reports repo-relative — match on the tail.
+ *
+ * The card lists files the TURN edited (tool results), not files git sees, so
+ * the path may live outside the pane's repo entirely — a session whose cwd
+ * isn't a git repo (config/scripts/cron workflows) or an edit pointing outside
+ * the worktree. Without a git baseline there is no diff to show; surface that
+ * with a toast + a reveal action instead of silently leaving the pane empty.
  */
 export async function openReviewForPath(
   path: string,
@@ -378,7 +387,18 @@ export async function openReviewForPath(
 
   if (file) {
     await selectReviewFile(file)
+
+    return
   }
+
+  notify({
+    kind: 'info',
+    message: translateNow('assistant.thread.noGitDiffForPath'),
+    action: {
+      label: translateNow('sidebar.reveal'),
+      onClick: () => void revealFile(path)
+    }
+  })
 }
 
 // ── Mutations ────────────────────────────────────────────────────────────────

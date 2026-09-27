@@ -3946,6 +3946,8 @@ export const ru = defineLocale({
       dismissError: 'Скрыть ошибку',
       filesChanged: count => `${count} ${RU_PLURAL(count, 'файл изменён', 'файла изменено', 'файлов изменено')}`,
       reviewChanges: 'Проверить',
+      noGitDiffForPath:
+        'Для этого файла нет git-различий — он находится вне git-репозитория, поэтому панель проверки не может его сравнить.',
       readAloudFailed: 'Не удалось зачитать вслух',
       preparingAudio: 'Подготовка аудио...',
       stopReading: 'Остановить чтение',

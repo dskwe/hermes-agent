@@ -3826,6 +3826,7 @@ export const ja = defineLocale({
       errorSendDiagnostics: '診断情報を送信',
       filesChanged: count => `${count} 件のファイルを変更`,
       reviewChanges: 'レビュー',
+      noGitDiffForPath: 'このファイルには git 差分がありません — git リポジトリの外側にあるため、レビューパネルで比較できません。',
       readAloudFailed: '読み上げに失敗しました',
       preparingAudio: '音声を準備中...',
       stopReading: '読み上げを停止',

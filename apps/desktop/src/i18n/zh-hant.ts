@@ -3996,6 +3996,7 @@ export const zhHant = defineLocale({
       errorSendDiagnostics: '傳送診斷資訊',
       filesChanged: count => `${count} 個檔案已變更`,
       reviewChanges: '檢視',
+      noGitDiffForPath: '此檔案沒有 git 差異——它不在 git 儲存庫內，檢視面板無法對比。',
       readAloudFailed: '朗讀失敗',
       preparingAudio: '正在準備音訊...',
       stopReading: '停止朗讀',

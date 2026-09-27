@@ -4782,6 +4782,7 @@ export const zh = defineLocale({
       errorSendDiagnostics: '发送诊断信息',
       filesChanged: count => `${count} 个文件已更改`,
       reviewChanges: '查看',
+      noGitDiffForPath: '此文件没有 git 差异——它不在 git 仓库内，审阅面板无法对比。',
       readAloudFailed: '朗读失败',
       preparingAudio: '正在准备音频...',
       stopReading: '停止朗读',

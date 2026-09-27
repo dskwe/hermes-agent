@@ -4311,6 +4311,7 @@ export interface Translations {
       errorSendDiagnostics: string
       filesChanged: (count: number) => string
       reviewChanges: string
+      noGitDiffForPath: string
       readAloudFailed: string
       preparingAudio: string
       stopReading: string

@@ -5610,6 +5610,8 @@ export const frOverrides = {
       errorSendDiagnostics: 'Envoyer les diagnostics',
       filesChanged: count => (count === 1 ? '1 fichier modifié' : `${count} fichiers modifiés`),
       reviewChanges: 'Examiner',
+      noGitDiffForPath:
+        "Pas de diff git pour ce fichier — il se trouve en dehors d'un dépôt git, le panneau de revue ne peut donc pas le comparer.",
       readAloudFailed: 'Échec de la lecture à voix haute',
       preparingAudio: "Préparation de l'audio…",
       stopReading: 'Arrêter la lecture',

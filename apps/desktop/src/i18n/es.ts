@@ -5588,6 +5588,8 @@ export const esOverrides = {
       errorSendDiagnostics: 'Enviar diagnóstico',
       filesChanged: count => (count === 1 ? '1 archivo cambiado' : `${count} archivos cambiados`),
       reviewChanges: 'Revisar',
+      noGitDiffForPath:
+        'No hay diff de git para este archivo: está fuera de un repositorio git, así que el panel de revisión no puede compararlo.',
       readAloudFailed: 'Falló la lectura en voz alta',
       preparingAudio: 'Preparando audio...',
       stopReading: 'Detener lectura',

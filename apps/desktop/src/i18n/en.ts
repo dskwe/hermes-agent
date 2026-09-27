@@ -5190,6 +5190,8 @@ export const en: Translations = {
       errorSendDiagnostics: 'Send diagnostics',
       filesChanged: count => (count === 1 ? '1 file changed' : `${count} files changed`),
       reviewChanges: 'Review',
+      noGitDiffForPath:
+        'No git diff for this file — it lives outside a git repository, so the review pane can’t diff it.',
       readAloudFailed: 'Read aloud failed',
       preparingAudio: 'Preparing audio...',
       stopReading: 'Stop reading',

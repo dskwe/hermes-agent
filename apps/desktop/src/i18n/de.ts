@@ -5600,6 +5600,8 @@ export const deOverrides = {
       errorSendDiagnostics: 'Diagnose senden',
       filesChanged: count => (count === 1 ? '1 Datei geändert' : `${count} Dateien geändert`),
       reviewChanges: 'Prüfen',
+      noGitDiffForPath:
+        'Für diese Datei gibt es keinen Git-Diff — sie liegt außerhalb eines Git-Repositorys und kann daher nicht verglichen werden.',
       readAloudFailed: 'Vorlesen fehlgeschlagen',
       preparingAudio: 'Bereitet Audio vor...',
       stopReading: 'Vorlesen stoppen',

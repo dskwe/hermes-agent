@@ -3256,6 +3256,7 @@ export const ar = defineLocale({
       errorSendDiagnostics: 'إرسال التشخيصات',
       filesChanged: count => `${count} ملفات تم تغييرها`,
       reviewChanges: 'مراجعة',
+      noGitDiffForPath: 'لا يوجد فرق git لهذا الملف — فهو خارج مستودع git، لذا لا تستطيع لوحة المراجعة مقارنته.',
       readAloudFailed: 'فشلت القراءة بصوت عال',
       preparingAudio: 'جار تجهيز الصوت',
       stopReading: 'إيقاف القراءة',
