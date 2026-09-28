@@ -3288,7 +3288,12 @@ class _StreamingCall(StreamingWaitMonitor):
                     pending = "".join(pending_text_parts)
                     if not (_provider_stream_text_may_be_sse(pending) or router_timeout_shim_may_follow(pending)):
                         _flush_pending_stream_text()
-                    continue
+                    # No `continue` here: a chunk may carry BOTH text and tool_call
+                    # deltas (gateways merge a preamble into the first tool_calls
+                    # frame). Skipping the rest of the body silently dropped the
+                    # tool call — the text branch below must only gate emission,
+                    # never the accumulator feed. The tool_calls block flushes any
+                    # pending text itself before feeding.
                 else:
                     self._emit_text(delta_content)
 
