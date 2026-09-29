@@ -46,6 +46,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Windows PowerShell 5.1 decodes redirected native stdout using the active
+# console code page. uv emits UTF-8 paths, so a non-ASCII profile component can
+# otherwise turn into mojibake before the path reaches the next stage. Set both
+# encodings before invoking any native bootstrap command; PowerShell 7 already
+# uses UTF-8, so this is harmless there.
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = $utf8
+try { [Console]::OutputEncoding = $utf8 } catch { }
+
 # -SkipSetup is the pre-rework spelling of -NonInteractive.
 if ($SkipSetup) { $NonInteractive = $true }
 
