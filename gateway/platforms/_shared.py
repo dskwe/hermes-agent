@@ -248,3 +248,19 @@ def coerce_port(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+# Shared inbound-auth primitives: attacker-controlled values may contain surrogate escapes.
+def secrets_match(provided: str, expected: str) -> bool:
+    import hmac
+    try:
+        return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
+    except (UnicodeEncodeError, AttributeError, TypeError):
+        return False
+
+def timestamp_fresh(raw: str, now: float | None = None, window: int = 300) -> bool:
+    import time
+    try:
+        return abs((time.time() if now is None else now) - int(raw)) <= window
+    except (TypeError, ValueError):
+        return False

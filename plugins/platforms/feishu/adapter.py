@@ -25,6 +25,8 @@ import concurrent.futures
 import contextvars
 import hashlib
 import hmac
+
+from gateway.platforms._shared import secrets_match, timestamp_fresh
 import itertools
 import json
 import logging
@@ -2899,8 +2901,7 @@ class FeishuAdapter(BasePlatformAdapter):
         try:
             body_str = body_bytes.decode("utf-8", errors="replace")
             computed = hashlib.sha256(f"{timestamp}{nonce}{self._encrypt_key}{body_str}".encode("utf-8")).hexdigest()
-            # Compare as bytes: compare_digest raises TypeError on non-ASCII str, and the header is remote input.
-            return hmac.compare_digest(computed.encode(), signature.encode())
+            return timestamp_fresh(timestamp) and secrets_match(computed, signature)
         except Exception:
             logger.debug("[Feishu] Signature verification raised an exception", exc_info=True)
             return False

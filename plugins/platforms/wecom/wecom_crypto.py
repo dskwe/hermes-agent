@@ -8,6 +8,8 @@ import os
 import secrets
 import socket
 import struct
+
+from gateway.platforms._shared import secrets_match, timestamp_fresh
 from typing import Optional
 from xml.etree import ElementTree as ET
 
@@ -73,7 +75,7 @@ class WXBizMsgCrypt:
         return self.decrypt(msg_signature, timestamp, nonce, echostr).decode("utf-8")
 
     def decrypt(self, msg_signature: str, timestamp: str, nonce: str, encrypt: str) -> bytes:
-        if _sha1_signature(self.token, timestamp, nonce, encrypt) != msg_signature:
+        if not timestamp_fresh(timestamp) or not secrets_match(_sha1_signature(self.token, timestamp, nonce, encrypt), msg_signature):
             raise SignatureError("signature mismatch")
         try:
             cipher_text = base64.b64decode(encrypt)
