@@ -318,7 +318,10 @@ const ComposerPane = memo(function ComposerPane({
 
   const promptWidth = composerPromptWidth(promptText)
   const promptBlank = ' '.repeat(promptWidth)
-  const inputColumns = stableComposerColumns(composer.cols, promptWidth, TERMUX_TUI_MODE)
+  // The composer rail occupies one column; keep the prompt and wrapped draft
+  // inside its content box so the rail costs no rows and exactly one column.
+  const composerContentWidth = Math.max(1, composer.cols - 3)
+  const inputColumns = stableComposerColumns(composerContentWidth, promptWidth, TERMUX_TUI_MODE)
   const inputHeight = inputVisualHeight(composer.input, inputColumns)
   const inputMouseRef = useRef<null | TextInputMouseApi>(null)
 
@@ -419,7 +422,16 @@ const ComposerPane = memo(function ComposerPane({
         {!nativeMode && composer.input === '?' && !composer.inputBuf.length && <HelpHint t={ui.theme} />}
 
         {!isBlocked && (
-          <>
+          <Box
+            borderColor={ui.theme.color.border}
+            borderLeft
+            borderStyle="single"
+            borderTop={false}
+            borderBottom={false}
+            borderRight={false}
+            flexDirection="column"
+            width={Math.max(1, composer.cols - 2)}
+          >
             {composer.inputBuf.map((line, i) => (
               <Box key={i}>
                 <Box width={promptWidth}>
@@ -439,7 +451,7 @@ const ComposerPane = memo(function ComposerPane({
               onMouseDrag={dragFromPromptRow}
               onMouseUp={endInputDrag}
               position="relative"
-              width={Math.max(1, composer.cols - 2)}
+              width={composerContentWidth}
             >
               <Box width={promptWidth}>
                 {sh ? (
@@ -478,7 +490,7 @@ const ComposerPane = memo(function ComposerPane({
                 <GoodVibesHeart t={ui.theme} tick={status.goodVibesTick} />
               </Box>
             </Box>
-          </>
+          </Box>
         )}
       </Box>
 
