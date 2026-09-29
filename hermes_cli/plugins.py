@@ -707,6 +707,7 @@ class PluginContext:
         resolved automatically; returns the handler's JSON string. ``kwargs`` forward to dispatch."""
         from tools.registry import registry
         # In gateway mode _cli_ref is None — tools degrade gracefully (no spinner, TERMINAL_CWD).
+        kwargs.setdefault("profile", self.profile_name)
         if "parent_agent" not in kwargs:
             agent = getattr(self._manager._cli_ref, "agent", None)
             if agent is not None:

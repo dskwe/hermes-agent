@@ -62,6 +62,28 @@ class TestRegisterAndDispatch:
         assert json.loads(reg.dispatch("wide", {}, **injected)) == {"ok": True}
         assert seen["wide"] == injected
 
+    def test_plugin_dispatch_supplies_profile_identity(self, monkeypatch):
+        from hermes_cli.plugins import PluginContext, PluginManager
+        from hermes_cli.plugins_manifest import PluginManifest
+
+        seen = {}
+
+        def handler(args, **kwargs):
+            seen.update(kwargs)
+            return json.dumps({"ok": True})
+
+        manager = PluginManager(scope_key="/tmp/hermes-profile-test")
+        manifest = PluginManifest(name="test-plugin", key="test-plugin")
+        context = PluginContext(manifest, manager)
+        monkeypatch.setattr(type(context), "profile_name", property(lambda _self: "team-a"))
+        registry = ToolRegistry()
+        registry.register(name="profiled", toolset="core", schema=_make_schema("profiled"), handler=handler)
+
+        with patch("tools.registry.registry", registry):
+            assert json.loads(context.dispatch_tool("profiled", {})) == {"ok": True}
+
+        assert seen["profile"] == "team-a"
+
     def test_register_rejects_non_dict_parameters(self):
         """A list/str ``parameters`` fails at registration, not in a provider request (pi acaa253cc)."""
         reg = ToolRegistry()
