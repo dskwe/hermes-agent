@@ -318,7 +318,8 @@ const ComposerPane = memo(function ComposerPane({
 
   const promptWidth = composerPromptWidth(promptText)
   const promptBlank = ' '.repeat(promptWidth)
-  const inputColumns = stableComposerColumns(composer.cols, promptWidth, TERMUX_TUI_MODE)
+  const composerRailWidth = 1
+  const inputColumns = stableComposerColumns(composer.cols - composerRailWidth, promptWidth, TERMUX_TUI_MODE)
   const inputHeight = inputVisualHeight(composer.input, inputColumns)
   const inputMouseRef = useRef<null | TextInputMouseApi>(null)
 
@@ -339,7 +340,7 @@ const ComposerPane = memo(function ComposerPane({
     }
 
     e.stopImmediatePropagation?.()
-    inputMouseRef.current?.dragAt(e.localRow ?? 0, (e.localCol ?? 0) - promptWidth)
+    inputMouseRef.current?.dragAt(e.localRow ?? 0, (e.localCol ?? 0) - promptWidth - composerRailWidth)
   }
 
   // Spacer rows live on a different vertical origin; only the column is
@@ -422,6 +423,9 @@ const ComposerPane = memo(function ComposerPane({
           <>
             {composer.inputBuf.map((line, i) => (
               <Box key={i}>
+                <Box width={composerRailWidth}>
+                  <Text color={ui.theme.color.border}>│</Text>
+                </Box>
                 <Box width={promptWidth}>
                   {i === 0 ? (
                     <PromptPrefix color={ui.theme.color.muted} promptText={promptText} width={promptWidth} />
@@ -429,8 +433,9 @@ const ComposerPane = memo(function ComposerPane({
                     <Text color={ui.theme.color.muted}>{promptBlank}</Text>
                   )}
                 </Box>
-
-                <Text color={ui.theme.color.text}>{line || ' '}</Text>
+                <Box width={inputColumns}>
+                  <Text color={ui.theme.color.text}>{line || ' '}</Text>
+                </Box>
               </Box>
             ))}
 
@@ -441,6 +446,9 @@ const ComposerPane = memo(function ComposerPane({
               position="relative"
               width={Math.max(1, composer.cols - 2)}
             >
+              <Box width={composerRailWidth}>
+                <Text color={ui.theme.color.border}>│</Text>
+              </Box>
               <Box width={promptWidth}>
                 {sh ? (
                   <PromptPrefix color={ui.theme.color.shellDollar} promptText={promptText} width={promptWidth} />
