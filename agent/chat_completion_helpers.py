@@ -50,7 +50,7 @@ from agent.reasoning_summaries import (
     append_streamed_reasoning_detail, separate_glued_reasoning_blocks,
     streamed_reasoning_detail_text,
 )
-from agent.repetition_guard import is_repetition_dominated
+from agent.repetition_guard import is_repetition_dominated, is_runaway_repetition
 from agent.stream_single_writer import claim_stream_writer, stream_writer_is_current
 from tools.terminal_tool_lifecycle import is_persistent_env
 from utils import base_url_host_matches, base_url_hostname, env_float, env_int
@@ -3019,6 +3019,18 @@ class _StreamingCall(StreamingWaitMonitor):
         if finish_reason and isinstance(diag, dict) and not diag.get("finish_reason_seen"):
             diag["finish_reason_seen"] = True
 
+    def _raise_for_live_repetition(self, text: str, checked_length: int) -> int:
+        """Stop an uncapped stream once the existing runaway criterion is reached.
+
+        The detector is intentionally applied to raw content/reasoning, independent of
+        callbacks: cron and quiet subagents still need the same safety bound.
+        """
+        length = len(text)
+        if length >= 16_000 and length >= checked_length * 2 and is_runaway_repetition(text[-32_768:]):
+            self._close_managed_stream()
+            raise InterruptedError("Streaming response stopped: repetition detected")
+        return max(checked_length, 16_000 if length >= 16_000 else 0)
+
     # ── chat_completions wire ───────────────────────────────────────────
 
     def _stream_timeouts(self) -> tuple[float, float, float]:
@@ -3159,6 +3171,8 @@ class _StreamingCall(StreamingWaitMonitor):
         # ``delta.content`` stays empty, so an un-accumulated refusal looks like an empty
         # stream and burns the empty-response retries (the non-streaming fix is #46013).
         refusal_parts: list[str] = []
+        last_content_repetition_check = 0
+        last_reasoning_repetition_check = 0
         reasoning_details: list = []  # OpenRouter replay data (signatures, encrypted blocks)
         pending_text_parts: list[str] = []
         tool_calls = _ToolCallAccumulator()
@@ -3240,6 +3254,8 @@ class _StreamingCall(StreamingWaitMonitor):
                 reasoning_text = separate_glued_reasoning_blocks(
                     reasoning_parts[-1] if reasoning_parts else "", reasoning_text)
                 reasoning_parts.append(reasoning_text)
+                last_reasoning_repetition_check = self._raise_for_live_repetition(
+                    "".join(reasoning_parts), last_reasoning_repetition_check)
             # Structured reasoning_details deltas carry the provider's replay data; the
             # non-streaming path already keeps them, so dropping them here lost
             # reasoning continuity on nearly every turn. Pydantic parks unknown fields
@@ -3280,6 +3296,8 @@ class _StreamingCall(StreamingWaitMonitor):
             delta_content = flatten_message_text(getattr(delta, "content", None), sep="")
             if delta_content:
                 content_parts.append(delta_content)
+                last_content_repetition_check = self._raise_for_live_repetition(
+                    "".join(content_parts), last_content_repetition_check)
                 if tool_calls_acc:
                     self._route_suppressed_text(delta_content)
                 elif (pending_text_parts or _provider_stream_text_may_be_sse(delta_content)
@@ -3472,6 +3490,10 @@ class _StreamingCall(StreamingWaitMonitor):
         per-request ``request_client`` so the watchdog can abort this socket
         without closing the shared client mid-flight."""
         has_tool_use = False
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        last_content_repetition_check = 0
+        last_reasoning_repetition_check = 0
         # No message_stop -> EmptyStreamError; saw_stream_event only picks the message.
         saw_stream_event = False
         saw_message_stop = False
@@ -3534,8 +3556,14 @@ class _StreamingCall(StreamingWaitMonitor):
                     if delta_type == "text_delta":
                         text = getattr(delta, "text", "")
                         if text and not has_tool_use:
+                            content_parts.append(text)
+                            last_content_repetition_check = self._raise_for_live_repetition(
+                                "".join(content_parts), last_content_repetition_check)
                             self._emit_text(text)
                     elif delta_type == "thinking_delta" and getattr(delta, "thinking", ""):
+                        reasoning_parts.append(delta.thinking)
+                        last_reasoning_repetition_check = self._raise_for_live_repetition(
+                            "".join(reasoning_parts), last_reasoning_repetition_check)
                         self._emit_reasoning(delta.thinking)
             raw_stream = _stream_context["stream"]
             if not self.agent._interrupt_requested and raw_stream is not None:
