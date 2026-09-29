@@ -491,7 +491,14 @@ def _get_process_start_time(pid: int) -> Optional[int]:
     # of the same process compare equal without float-precision fragility.
     try:
         import psutil  # type: ignore
-        return int(round(psutil.Process(pid).create_time() * 100))
+        process = psutil.Process(pid)
+        try:
+            # macOS adjusts the public epoch value using psutil's import-time boot
+            # timestamp.  The monotonic kernel value is stable across clock corrections.
+            start_time = process._proc.create_time(monotonic=True)
+        except (AttributeError, TypeError):
+            start_time = process.create_time()
+        return int(round(start_time * 100))
     except Exception:
         return None
 
