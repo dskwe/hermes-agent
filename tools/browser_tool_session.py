@@ -23,6 +23,7 @@ from tools import browser_tool_lifecycle as _lifecycle
 from tools import browser_tool_lightpanda_fallback as _lp
 from tools import browser_tool_real_profile as _real_profile
 from tools import browser_tool_snapshot as _snapshot
+from tools.secure_temp import ensure_private_dir, user_scoped_name
 
 _DOCKER_PULL = "docker pull ghcr.io/nousresearch/hermes-agent:latest"
 _CHROMIUM_INSTALL = "hermes pm install chromium (system libraries: npx playwright install-deps chromium)"
@@ -147,8 +148,9 @@ def _prepare_session_socket_dir(session_name: str) -> str:
     """Create the per-session socket dir (parallel workers must not share one) and claim it
     with our PID BEFORE first use — another hermes process's orphan reaper rmtree's any
     ownerless agent-browser-* dir in the shared tmpdir."""
-    socket_dir = os.path.join(_bt._socket_safe_tmpdir(), f"agent-browser-{session_name}")
-    os.makedirs(socket_dir, mode=0o700, exist_ok=True)
+    socket_dir = os.path.join(
+        _bt._socket_safe_tmpdir(), user_scoped_name(f"agent-browser-{session_name}"))
+    ensure_private_dir(socket_dir)
     _lifecycle._write_owner_pid(socket_dir, session_name)
     return socket_dir
 

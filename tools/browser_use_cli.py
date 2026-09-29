@@ -68,7 +68,9 @@ def _hermes_ensure_own_tab():
     except Exception:
         pass  # best-effort: worst case is pre-fix behavior
     try:
-        open(_marker, "w").close()
+        _fd = _os.open(_marker, _os.O_WRONLY | _os.O_CREAT | _os.O_EXCL |
+                       getattr(_os, "O_NOFOLLOW", 0), 0o600)
+        _os.close(_fd)
     except OSError:
         pass
 _hermes_ensure_own_tab()

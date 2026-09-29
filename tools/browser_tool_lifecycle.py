@@ -203,9 +203,9 @@ def _write_owner_pid(socket_dir: str, session_name: str) -> None:
     reaper can tell live-owner daemons from crashed-owner ones. Best-effort: an
     OSError falls back to the legacy ``tracked_names`` heuristic."""
     try:
+        from tools.secure_temp import write_private_file
         path = os.path.join(socket_dir, f"{session_name}.owner_pid")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(str(os.getpid()))
+        write_private_file(path, str(os.getpid()))
     except OSError as exc:
         _bt.logger.debug("Could not write owner_pid file for %s: %s", session_name, exc)
 

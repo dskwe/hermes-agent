@@ -17,6 +17,7 @@ from tools.environments.file_sync import (
     FileSyncManager, iter_sync_files, quoted_mkdir_command, quoted_rm_command, unique_parent_dirs)
 from tools.environments.remote_common import (
     bash_argv, client_env_with, load_hermes_env_vars, prepend_unset, resolve_passthrough_env, run_capture)
+from tools.secure_temp import ensure_private_dir, user_scoped_name
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,8 @@ class SSHEnvironment(BaseEnvironment):
                  probe_only: bool = False):
         super().__init__(cwd=cwd, timeout=timeout)
         self.host, self.user, self.port, self.key_path = host, user, port, key_path
-        self.control_dir = Path(tempfile.gettempdir()) / "hermes-ssh"
-        self.control_dir.mkdir(parents=True, exist_ok=True)
+        self.control_dir = Path(tempfile.gettempdir()) / user_scoped_name("hermes-ssh")
+        ensure_private_dir(self.control_dir)
         # Short, deterministic socket name: the path must stay under macOS's 104-byte sun_path
         # limit (raw user@host:port + SSH's 16-byte suffix under a deep $TMPDIR exceeds it), and
         # stability across reconnects keeps ControlMaster reuse working. A probe gets its own
