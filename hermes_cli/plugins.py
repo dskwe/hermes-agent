@@ -2286,6 +2286,7 @@ def get_plugin_toolsets() -> List[tuple]:
         return []
     try:
         from tools.registry import registry
+        from toolsets import TOOLSETS
     except Exception:
         return []
     # Group plugin tool names by their toolset, then map each toolset back to the plugin that
@@ -2303,6 +2304,8 @@ def get_plugin_toolsets() -> List[tuple]:
                 toolset_plugin.setdefault(entry.toolset, loaded)
     result = []
     for ts_key in sorted(toolset_tools):
+        if ts_key in TOOLSETS:
+            continue
         plugin = toolset_plugin.get(ts_key)
         desc = (plugin.manifest.description if plugin else "") or ", ".join(sorted(toolset_tools[ts_key]))
         result.append((ts_key, f"🔌 {ts_key.replace('_', ' ').title()}", desc))

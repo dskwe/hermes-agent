@@ -155,8 +155,11 @@ def _get_effective_configurable_toolsets():
     seen = {ts_key for ts_key, _, _ in result}
     try:
         from hermes_cli.plugins import discover_plugins, get_plugin_toolsets
+        from toolsets import CLIENT_SURFACE_TOOLSETS
         discover_plugins()  # idempotent — ensures plugins are loaded
         for entry in get_plugin_toolsets():
+            if entry[0] in CLIENT_SURFACE_TOOLSETS:
+                continue
             if entry[0] not in seen:
                 seen.add(entry[0])
                 result.append(entry)
