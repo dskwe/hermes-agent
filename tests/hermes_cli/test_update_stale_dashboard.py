@@ -609,6 +609,17 @@ class TestFilterDashboardRespawnCandidates:
         argv = ["hermes", "serve", "--port=0"]
         assert _filter_dashboard_respawn_candidates([(1, argv, None)]) == []
 
+    def test_skips_port_zero_in_python_c_launcher(self):
+        from hermes_cli.dashboard_procs import _filter_dashboard_respawn_candidates
+
+        source = (
+            "import sys, runpy; sys.argv = ['/checkout/venv/bin/hermes', 'serve', "
+            "'--isolated', '--host', '127.0.0.1', '--port', '0']; "
+            "runpy.run_path('/checkout/venv/bin/hermes', run_name='__main__')"
+        )
+        argv = ["/managed/python3", "-I", "-c", source]
+        assert _filter_dashboard_respawn_candidates([(42, argv, None)]) == []
+
 
     def test_dedupes_identical_normalized_cmdlines(self):
         from hermes_cli.dashboard_procs import _filter_dashboard_respawn_candidates

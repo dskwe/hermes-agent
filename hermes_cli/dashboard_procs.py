@@ -5,6 +5,7 @@ call time so imports stay one-way (both of those modules import this one lazily)
 """
 
 import contextlib
+import ast
 import os
 import subprocess
 import sys
@@ -207,6 +208,35 @@ def _dashboard_subcommand_index(argv: list[str]) -> int | None:
     return next((i for i, tok in enumerate(argv) if tok in ("serve", "dashboard")), None)
 
 
+def _logical_dashboard_argv(argv: list[str]) -> list[str]:
+    """Return Hermes argv carried by a canonical Python ``-c`` launcher, when present."""
+    try:
+        from gateway.status import inline_bootstrap_argv
+
+        if (normalized := inline_bootstrap_argv(argv)) is not None:
+            return normalized
+    except Exception:
+        pass
+    try:
+        source = argv[argv.index("-c") + 1]
+        tree = ast.parse(source)
+    except (ValueError, IndexError, SyntaxError):
+        return argv
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                and target.value.id == "sys" and target.attr == "argv"):
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, TypeError):
+                return argv
+            if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                return value
+    return argv
+
+
 def _profile_flag_value(argv: list[str]) -> str | None:
     """Value of the first ``--profile X`` / ``-p X`` / ``--profile=X`` in *argv*."""
     for i, tok in enumerate(argv):
@@ -223,6 +253,7 @@ def _is_ephemeral_port_zero_backend(argv: list[str]) -> bool:
 
     See #78821.
     """
+    argv = _logical_dashboard_argv(argv)
     if _dashboard_subcommand_index(argv) is None:
         return False
     return any((tok == "--port" and i + 1 < len(argv) and str(argv[i + 1]) == "0")
