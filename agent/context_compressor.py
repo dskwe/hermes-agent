@@ -3571,9 +3571,10 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         return summary
 
     @classmethod
-    def _bound_summary_input(cls, content: str) -> str:
+    def _bound_summary_input(cls, content: str, cap: int | None = None) -> str:
         """Cap total summarizer input, keeping head and tail and marking the omitted middle."""
-        if len(content) <= cls._SUMMARY_INPUT_MAX_CHARS:
+        cap = cls._SUMMARY_INPUT_MAX_CHARS if cap is None else max(1, int(cap))
+        if len(content) <= cap:
             return content
 
         marker_template = (
@@ -3584,7 +3585,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         omitted = len(content)
         for _ in range(2):
             marker = marker_template.format(omitted=omitted)
-            remaining = max(cls._SUMMARY_INPUT_MAX_CHARS - len(marker), 0)
+            remaining = max(cap - len(marker), 0)
             head_chars = int(remaining * 0.45)
             tail_chars = remaining - head_chars
             omitted = max(len(content) - head_chars - tail_chars, 0)
@@ -3947,8 +3948,14 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
         _session_log_section = _LEAN_SESSION_LOG_SECTION if getattr(self, "tail_mode", "lean") == "lean" else ""
         _template_sections = self._summary_template_sections(_section, summary_budget, _session_log_section)
         if self._previous_summary:
-            # Iterative update. Bound the previous summary too: a rehydrated handoff can be huge.
-            _bounded_previous_summary = self._bound_summary_input(self._previous_summary)
+            # The two blocks share one provider input window.  Reserve space for the fixed
+            # instructions before splitting the budget; otherwise each block can consume the
+            # full per-block cap and the assembled prompt exceeds a small auxiliary window.
+            _aux_window = getattr(self, "_aux_context_ceiling", None) or self.context_length
+            _prompt_cap = min(2 * self._SUMMARY_INPUT_MAX_CHARS, int(_aux_window * CHARS_PER_TOKEN))
+            _input_cap = max(1, (_prompt_cap - 30_000) // 2)
+            _bounded_previous_summary = self._bound_summary_input(self._previous_summary, _input_cap)
+            content_to_summarize = self._bound_summary_input(content_to_summarize, _input_cap)
             prompt = f"""{_summarizer_preamble}
 
 You are updating a context compaction summary. A previous compaction produced the summary below. New conversation turns have occurred since then and need to be incorporated.
