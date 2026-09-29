@@ -14,6 +14,8 @@ import random
 import sys
 from contextlib import suppress
 from dataclasses import dataclass
+
+_REDIRECT_RESTART_LIMIT = 10
 from typing import Any, Dict
 
 from agent.display import KawaiiSpinner
@@ -447,7 +449,7 @@ def apply_retry_restarts(
 
     if _retry.restart_with_redirected_messages:
         restart_count += 1
-        if restart_count > max_retries:
+        if restart_count > _REDIRECT_RESTART_LIMIT:
             # A redirect/interrupt keeps re-arming this flag: stop refunding the iteration
             # budget and re-issuing the same logical iteration, or a runaway turn holds the
             # turn lease indefinitely (redirect restarts previously had no bound).
@@ -455,7 +457,7 @@ def apply_retry_restarts(
             logger.warning(
                 "Redirected-message restart limit (%s) exceeded; ending turn instead of "
                 "refunding the iteration budget indefinitely.",
-                max_retries,
+                _REDIRECT_RESTART_LIMIT,
             )
             # The correction that tripped the cap was never applied; hand it back as the
             # next user turn (result["pending_steer"]) instead of losing it to clear_interrupt().

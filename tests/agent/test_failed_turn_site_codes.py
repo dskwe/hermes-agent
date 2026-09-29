@@ -129,7 +129,7 @@ def test_advisory_exit_reasons_stamp_a_code_but_never_flip_failed(exit_reason):
 @pytest.mark.parametrize("exit_reason, code", [
     ("context_compression_timeout", "context_overflow"),
     ("ollama_runtime_context_too_small", "context_overflow"),
-    ("redirect_restart_limit_exceeded", "loop_error"),
+    ("redirect_restart_limit_exceeded", "redirect_restart_limit"),
     ("rebuilt_restart_limit_exceeded", "loop_error"),
 ])
 def test_previously_bare_exit_reasons_now_carry_a_code(exit_reason, code):

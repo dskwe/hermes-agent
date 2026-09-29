@@ -36,7 +36,7 @@ LAYER_DISK = "disk"
 # clients' per-code copy names the real fix (`continue`, smaller steps, /retry).
 _REASON_TO_LAYER = {
     "auth": LAYER_AUTH, "auth_permanent": LAYER_AUTH, "billing": LAYER_BILLING, "billing_unverified": LAYER_BILLING,
-    "loop_error": LAYER_GATEWAY, "interpreter_shutdown": LAYER_GATEWAY, "session_busy": LAYER_GATEWAY,
+    "loop_error": LAYER_GATEWAY, "redirect_restart_limit": LAYER_GATEWAY, "interpreter_shutdown": LAYER_GATEWAY, "session_busy": LAYER_GATEWAY,
     "truncated": LAYER_PROVIDER, "empty_response": LAYER_PROVIDER, "invalid_response": LAYER_PROVIDER,
     "context_overflow": LAYER_PROVIDER,  # a bigger-window model IS the fix, so Switch provider applies
 }

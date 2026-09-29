@@ -18,7 +18,7 @@ from hermes_constants import display_hermes_home
 # Failure codes minted by loop sites that are not provider verdicts (see module docstring).
 SITE_FAILURE_CODES = frozenset({
     "context_overflow", "truncated", "invalid_response", "empty_response", "loop_error",
-    "interpreter_shutdown", "session_busy",
+    "interpreter_shutdown", "session_busy", "redirect_restart_limit",
 })
 
 
@@ -106,7 +106,7 @@ _EXIT_REASON_FAILURES: Tuple[Tuple[str, str, bool, bool], ...] = (
     ("context_compression_exhausted", "context_overflow", False, True),
     ("ollama_runtime_context_too_small", "context_overflow", False, True),
     # Advisory: the loop ends these as an incomplete (not failed) turn with an explainer.
-    ("redirect_restart_limit_exceeded", "loop_error", True, False),
+    ("redirect_restart_limit_exceeded", "redirect_restart_limit", True, False),
     ("rebuilt_restart_limit_exceeded", "loop_error", True, False),
 )
 
@@ -282,6 +282,9 @@ _FAILURE_CODE_COPY: Dict[str, str] = {
     "loop_error": (
         "Hermes hit repeated errors and stopped this turn so it wouldn't keep retrying. "
         + _NEXT_STEPS_LOOP + "\n\nDetails: {detail}"
+    ),
+    "redirect_restart_limit": (
+        "Your messages interrupted this reply too many times, so Hermes paused the turn before it could summarize the pending result. Send `continue` to let it finish."
     ),
     "interpreter_shutdown": (
         "Hermes was shutting down and stopped this turn. Your conversation is saved — reopen "

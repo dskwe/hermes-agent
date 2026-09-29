@@ -14,7 +14,7 @@ import pytest
 from agent.turn_iteration_prep import apply_retry_restarts, begin_iteration
 from agent.turn_retry_state import TurnRetryState
 
-RESTART_FLAGS = ["restart_with_redirected_messages", "restart_with_rebuilt_messages"]
+RESTART_FLAGS = ["restart_with_rebuilt_messages"]
 MAX_RETRIES = 3
 
 
@@ -90,3 +90,8 @@ def test_interrupt_exit_reason_names_the_system_issuer(tool_interrupt_reason, ex
     """A watchdog abort must not be recorded as a user stop: the exit reason carries the issuer."""
     verdict = _interrupted_agent(tool_interrupt_reason)
     assert (verdict.action, verdict.interrupted, verdict._turn_exit_reason) == ("break", True, expected)
+
+
+def test_redirect_limit_is_independent_of_api_retry_budget():
+    verdict = _apply(_agent(), "restart_with_redirected_messages", restart_count=0)
+    assert verdict.action == "continue"
