@@ -1403,7 +1403,11 @@ export function useMainApp(gw: GatewayClient) {
   const appProgress = useMemo(() => ({ showProgressArea }), [showProgressArea])
 
   const cwd = ui.info?.cwd || process.env.HERMES_CWD || process.cwd()
-  const gitBranch = useGitBranch(cwd)
+  const branchLabelVisible =
+    ui.statusBar !== 'off' &&
+    !(NATIVE_MODE && ui.statusBar !== 'top') &&
+    !(ui.sessionTitle && (ui.statusBarFields === null || ui.statusBarFields.has('title')))
+  const gitBranch = useGitBranch(cwd, branchLabelVisible)
 
   const appStatus = useMemo(
     () => ({
