@@ -202,6 +202,22 @@ def test_toolset_has_keys_for_vision_accepts_codex_auth(tmp_path, monkeypatch):
     assert _toolset_has_keys("vision") is True
 
 
+def test_canonical_mcp_toolset_narrows_to_one_server():
+    config = {
+        "mcp_servers": {
+            "linear": {"command": "linear-mcp"},
+            "github": {"command": "gh-mcp"},
+            "notion": {"command": "notion-mcp"},
+        },
+        "platform_toolsets": {"cli": ["hermes-cli", "mcp-linear"]},
+    }
+
+    enabled = _get_platform_tools(config, "cli")
+
+    assert "linear" in enabled
+    assert not {"github", "notion", "mcp-linear"} & enabled
+
+
 def test_save_platform_tools_preserves_mcp_server_names():
     """Ensure MCP server names are preserved when saving platform tools.
 

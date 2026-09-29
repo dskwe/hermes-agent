@@ -695,10 +695,20 @@ def _merge_mcp_servers(
     """Explicit passthrough entries plus this platform's MCP servers: listed names form an allowlist, else every
     globally enabled server (when ``include_default_mcp_servers``); the ``no_mcp`` sentinel disables all."""
     enabled_mcp_servers = enabled_mcp_server_names(config)
-    result = explicit_passthrough - enabled_mcp_servers
+    # MCP toolsets are registered as ``mcp-<server>`` while the server name
+    # itself remains a supported alias. Treat both spellings as the same
+    # explicit server selection; otherwise the canonical spelling falls
+    # through to the global default-server path.
+    canonical_mcp_servers = {
+        name for name in explicit_passthrough
+        if name.startswith("mcp-") and name[4:] in enabled_mcp_servers
+    }
+    explicit_mcp_servers = (explicit_passthrough & enabled_mcp_servers) | {
+        name[4:] for name in canonical_mcp_servers
+    }
+    result = explicit_passthrough - enabled_mcp_servers - canonical_mcp_servers
     if "no_mcp" in toolset_names:
         return result - {"no_mcp"}
-    explicit_mcp_servers = explicit_passthrough & enabled_mcp_servers
     if include_default_mcp_servers and not explicit_mcp_servers:
         return result | enabled_mcp_servers
     return result | explicit_mcp_servers
