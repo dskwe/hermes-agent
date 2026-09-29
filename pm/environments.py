@@ -200,7 +200,18 @@ def _recorded_venv(project_root: Path) -> Path | None:
         raise RuntimeError("invalid dependency environment path")
     environment = Path(value).resolve()
     generations = install_state_dir(project_root) / "environments"
-    if not environment.is_relative_to(generations.resolve()) or not (environment / "pyvenv.cfg").is_file():
+    # ``Path.is_relative_to`` compares spelling, not filesystem identity. On
+    # case-insensitive filesystems, a differently cased path can still refer to
+    # this generations tree. ``samefile`` follows filesystem lookup rules while
+    # retaining the containment check for every ancestor.
+    try:
+        inside_generations = any(
+            os.path.samefile(parent, generations)
+            for parent in (environment, *environment.parents)
+        )
+    except FileNotFoundError:
+        inside_generations = False
+    if not inside_generations or not (environment / "pyvenv.cfg").is_file():
         raise RuntimeError(f"dependency environment is missing or outside this install: {environment}")
     return environment
 
