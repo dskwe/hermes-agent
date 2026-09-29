@@ -793,6 +793,12 @@ class TestNativeScreenshots:
         out = f"{stale}\n/nonexistent/dir/x.png\n"
         assert bu_cli._find_screenshot(out, since=time.time()) is None
 
+    def test_find_screenshot_accepts_path_with_spaces(self, tmp_path):
+        shot = tmp_path / "Windows profile path with spaces" / "shot.png"
+        shot.parent.mkdir()
+        shot.write_bytes(b"\\x89PNG fake")
+        assert bu_cli._find_screenshot(f"saved {shot}", since=time.time() - 5) == str(shot)
+
     def test_vision_model_gets_multimodal_envelope(self, tmp_path, monkeypatch):
         shot = self._shot(tmp_path)
         cli = _fake_cli(tmp_path, f'cat > /dev/null\necho "{shot}"\n')
