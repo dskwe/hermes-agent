@@ -97,7 +97,8 @@ def _resolve_dispatcher_settings(kanban_cfg: dict, kb: Any) -> _DispatcherSettin
     # When set, the dispatcher applies it to unassigned ready tasks instead of skipping them indefinitely
     # (#27145). Empty string (the schema default) means "no fallback, keep skipping" — backward-compatible
     # with existing installs.
-    default_assignee = (kanban_cfg.get("default_assignee") or "").strip() or None
+    raw_default_assignee = kanban_cfg.get("default_assignee")
+    default_assignee = str(raw_default_assignee).strip() if raw_default_assignee is not None else None
     if default_assignee:
         logger.info("kanban dispatcher: default_assignee=%r (unassigned ready tasks "
                     "will route to this profile)", default_assignee)
