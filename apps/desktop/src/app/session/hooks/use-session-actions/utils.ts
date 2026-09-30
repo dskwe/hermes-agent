@@ -1618,6 +1618,30 @@ export function overlayConcurrentMessageChanges(
   const nextIndexById = new Map(nextMessages.map((message, index) => [message.id, index]))
   let changed = false
   const overlaid = [...nextMessages]
+  const coveredLiveIds = new Set<string>()
+
+  // A completed tool-heavy turn can expose several live bubbles: an interim
+  // text segment and a settled tail. The durable history folds those segments
+  // into one assistant row, so reconcile every live row against the same
+  // ordered turn fold before falling back to id-based overlaying. This must not
+  // depend on the committed row being new in the page; refreshes routinely
+  // retain it in the activation baseline.
+  currentMessages.forEach((current, index) => {
+    if (
+      current.role !== 'assistant' ||
+      !isLiveTailReplyId(current.id) ||
+      nextIndexById.has(current.id) ||
+      current.error
+    ) {
+      return
+    }
+
+    const folds = committedFoldsOfLocalTurn(overlaid, currentMessages, index)
+
+    if (durableFoldCoversLiveResponse(folds, current)) {
+      coveredLiveIds.add(current.id)
+    }
+  })
 
   let activationStreamIndex = overlaid.findIndex(
     message =>
@@ -1633,6 +1657,10 @@ export function overlayConcurrentMessageChanges(
     }
 
     const nextIndex = nextIndexById.get(current.id)
+
+    if (coveredLiveIds.has(current.id)) {
+      continue
+    }
 
     if (nextIndex !== undefined) {
       if (!chatMessagesEquivalent(overlaid[nextIndex], current)) {

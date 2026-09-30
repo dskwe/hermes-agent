@@ -2206,6 +2206,36 @@ describe('overlayConcurrentMessageChanges', () => {
     ])
   })
 
+  it('retires multiple settled live segments covered by a durable tool fold', () => {
+    const page = [
+      msg('3-user', 'user', 'prompt b', { rowId: 3 }),
+      {
+        ...msg('4-assistant', 'assistant', 'lead-in\nfinal answer', { rowId: 4 }),
+        parts: [
+          { type: 'text', text: 'lead-in' },
+          { type: 'tool-call', toolCallId: 'call-a', toolName: 'search', result: 'done' },
+          { type: 'text', text: 'final answer' }
+        ]
+      }
+    ]
+
+    const current = [
+      page[0],
+      msg('assistant-stream-1-34', 'assistant', 'lead-in', { pending: false, interim: true }),
+      {
+        ...msg('assistant-stream-1-35', 'assistant', 'final answer', { pending: false }),
+        parts: [
+          { type: 'tool-call', toolCallId: 'call-a', toolName: 'search', result: 'done' },
+          { type: 'text', text: 'final answer' }
+        ]
+      }
+    ]
+
+    const overlaid = overlayConcurrentMessageChanges(page, page, current)
+
+    expect(overlaid.map(message => message.id)).toEqual(['3-user', '4-assistant'])
+  })
+
   it('folds a settled live row that ran past the committed row into one reply', () => {
     const page = [
       msg('3-user', 'user', 'prompt b', { rowId: 3 }),
