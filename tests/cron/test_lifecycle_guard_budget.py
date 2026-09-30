@@ -220,7 +220,9 @@ def test_default_budget_admits_a_wide_benign_wrapper_graph(tmp_path):
 
 def test_profile_flag_scan_bounds_long_option_run():
     import time
-    command = 'her' + 'mes ' + '--exclude ' * 58 + '-p default ' + 'gate' + 'way stop'
+    benign = 'her' + 'mes ' + '--exclude ' * 58 + '$HOME/.hermes'
+    blocked = 'hermes ' + '--verbose ' * 13 + '-p default gateway stop'
     started = time.monotonic()
-    assert guard(command) is False
+    assert guard(benign) is False
+    assert guard(blocked) is True
     assert time.monotonic() - started < 1
