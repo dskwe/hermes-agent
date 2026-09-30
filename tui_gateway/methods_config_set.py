@@ -108,6 +108,9 @@ def _set_model(rid, params, key, value, session):
     """Live/deferred model switch; see _apply_model_switch and _apply_pending_model_switch."""
     if not value:
         return _err(rid, 4002, "model value required")
+    skew = _model_skew_err(rid)
+    if skew is not None:
+        return skew
     confirmed = bool(params.get("confirm_expensive_model", False))
     if session:
         from hermes_cli.model_switch import parse_model_switch_args
