@@ -719,8 +719,11 @@ def _commit_selection(package, facts: Facts, change, *, enabled: list[str], stam
     try:
         result = {} if current else (package.apply(enabled, explicit=explicit,
                                                    skip_invalid_secondary=skip_invalid_secondary, **inputs) or {})
-        if not repair and package.expected_stamp(enabled, **inputs) != stamp:
-            raise ValueError("Dependency inputs changed while preparing publication; retry.")
+        if not repair and not current:
+            # ``apply`` may materialize or refresh dependency inputs while preparing the
+            # replacement environment (notably a workspace lock). Record the stamp of the
+            # environment we actually built instead of rejecting that successful build.
+            stamp = package.expected_stamp(enabled, **inputs)
         if change is not None:
             change.publish(paths.repo_root())
         if not current:
