@@ -11,6 +11,8 @@ import importlib
 import inspect
 import logging
 import os
+import platform
+import sys
 import threading
 import tomllib
 import uuid
@@ -854,6 +856,12 @@ class RelayHostRegistry:
                 return host
             try:
                 host = RelayRuntime(profile_key=key)
+            except ModuleNotFoundError as exc:
+                if _relay_dependency_unavailable(exc):
+                    host = NoopRelayRuntime(profile_key=key, reason=str(exc))
+                else:
+                    logger.warning("Hermes Relay runtime initialization failed", exc_info=True)
+                    host = NoopRelayRuntime(profile_key=key, reason=str(exc))
             except Exception as exc:
                 logger.warning("Hermes Relay runtime initialization failed", exc_info=True)
                 host = NoopRelayRuntime(profile_key=key, reason=str(exc))
@@ -865,6 +873,20 @@ class RelayHostRegistry:
             hosts, self._hosts = list(self._hosts.values()), {}
         for host in hosts:
             host.shutdown()
+
+
+def _relay_dependency_unavailable(exc: ModuleNotFoundError) -> bool:
+    """Return whether the missing binding is expected on this platform."""
+    if exc.name != "nemo_relay":
+        return False
+    machine = platform.machine()
+    if sys.platform == "darwin":
+        return machine != "arm64"
+    if sys.platform == "linux":
+        return machine not in {"x86_64", "aarch64"} or "android" in platform.release().lower()
+    if sys.platform == "win32":
+        return machine not in {"AMD64", "ARM64", "amd64", "arm64"}
+    return True
 
 
 HOST_REGISTRY = RelayHostRegistry()
