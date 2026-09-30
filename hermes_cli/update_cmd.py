@@ -948,8 +948,14 @@ def _pull_updates(
                             ancestry_detail = (ancestry.stderr or ancestry.stdout or "").strip()
                             if ancestry_detail:
                                 print(f"  {ancestry_detail}")
-                        print("  Resolve the Git error and re-run `hermes update`; no reset was attempted.")
-                        sys.exit(1)
+                        # Preserve the git failure for the common error handler; exiting here
+                        # bypasses the Windows ZIP fallback for this merge path.
+                        raise subprocess.CalledProcessError(
+                            merge_result.returncode,
+                            [*git_cmd, "merge", "--ff-only", merge_ref],
+                            output=merge_result.stdout,
+                            stderr=merge_result.stderr,
+                        )
         except KeyboardInterrupt:
             raise  # Ctrl-C reached git too (same process group): the tree may be torn, keep the marker
         except BaseException:

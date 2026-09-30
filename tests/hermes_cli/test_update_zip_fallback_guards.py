@@ -78,6 +78,15 @@ def test_unknown_command_gets_generic_stage():
 
 
 
+
+def test_fast_forward_failure_preserves_git_error_for_zip_fallback(monkeypatch):
+    monkeypatch.setattr(hermes_main, "_is_windows", lambda: True)
+    monkeypatch.setattr(main_install_repair, "_is_windows", lambda: True)
+    exc = _cpe(["git", "merge", "--ff-only", "origin/main"], returncode=128,
+               stderr="fatal: could not fetch promised object")
+    assert update_cmd._should_zip_fallback_on_update_error(exc) is True
+    assert "could not fetch promised object" in exc.stderr
+
 def test_posix_git_failure_does_not_zip(monkeypatch):
     monkeypatch.setattr(hermes_main, "_is_windows", lambda: False)
     monkeypatch.setattr(main_install_repair, "_is_windows", lambda: False)
