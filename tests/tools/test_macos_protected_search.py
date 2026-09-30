@@ -142,6 +142,7 @@ def test_rg_multi_root_scopes_protected_globs_and_restores_absolute_paths(monkey
     command = commands[0]
     assert command.startswith("set -o pipefail; cd '/' && ")
     assert "--sortr=modified" in command
+    assert "'!Users/alice/Downloads'" in command
     assert "'!Users/alice/Downloads/**'" in command
     assert "'!repo/Downloads/**'" not in command
     assert "'Users/alice' 'repo'" in command
@@ -194,3 +195,40 @@ def test_real_ripgrep_does_not_descend_into_protected_folder(tmp_path, monkeypat
     paths = [match.path for match in result.matches]
     assert any("visible.txt" in path for path in paths)
     assert all("protected.txt" not in path for path in paths)
+
+
+@pytest.mark.platforms("macos")
+def test_real_ripgrep_file_search_prunes_protected_folder_entry(tmp_path, monkeypatch):
+    home = tmp_path / "Users" / "alice"
+    safe = home / "safe"
+    protected = home / "Downloads"
+    safe.mkdir(parents=True)
+    protected.mkdir()
+    (safe / "visible.txt").write_text("safe")
+    (protected / "protected.txt").write_text("protected")
+    monkeypatch.setattr(file_operations, "_HOME", str(home))
+    env = RecordingEnvironment(home)
+    env.is_local = True
+
+    def execute(command, cwd=None, **kwargs):
+        env.commands.append(command)
+        if command.startswith("test -e"):
+            return {"output": "exists\n", "returncode": 0}
+        if "--files" in command:
+            return {
+                "output": f"{safe}/visible.txt\n",
+                "returncode": 0,
+            }
+        return {"output": "", "returncode": 1}
+
+    env.execute = execute
+    ops = ShellFileOperations(env)
+    monkeypatch.setattr(ops, "_resolve_command", lambda command: "/usr/bin/rg")
+
+    result = ops.search("*.txt", path=str(home), target="files")
+
+    assert result.error is None
+    assert result.files == [f"{safe}/visible.txt"]
+    command = _rg_files_commands(env.commands)[0]
+    assert f"'!Downloads'" in command
+    assert f"'!Downloads/**'" in command
