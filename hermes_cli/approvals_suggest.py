@@ -19,6 +19,13 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 
+def _allowlist_config_display() -> str:
+    """Return the active profile config path for user-facing output."""
+    from hermes_constants import display_hermes_home
+
+    return f"{display_hermes_home()}/config.yaml"
+
+
 # ---------------------------------------------------------------------------
 # Safety exclusions
 # ---------------------------------------------------------------------------
@@ -309,7 +316,7 @@ def _render_text(proposals: list[Proposal], days: int) -> None:
     print(
         "\nNothing has been changed. Apply selected entries with:\n"
         "  hermes approvals suggest --apply 1,3\n"
-        "Entries are merged into command_allowlist in ~/.hermes/config.yaml."
+        f"Entries are merged into command_allowlist in {_allowlist_config_display()}."
     )
 
 
@@ -344,7 +351,7 @@ def suggest_command(args) -> int:
             print("Added to command_allowlist:")
             for pattern in applied:
                 print(f"  + {pattern}")
-            print(f"\ncommand_allowlist now has {len(merged)} entries (~/.hermes/config.yaml).")
+            print(f"\ncommand_allowlist now has {len(merged)} entries ({_allowlist_config_display()}).")
         return 0
 
     if as_json:
