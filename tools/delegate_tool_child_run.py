@@ -307,15 +307,26 @@ class _Heartbeat:
             child_iter = child_summary.get("api_call_count", 0)
             child_max = child_summary.get("max_iterations", 0)
             child_activity_ts = child_summary.get("last_activity_ts")
+            child_activity_desc = str(child_summary.get("last_activity_desc") or "")
             # A slow model wait refreshes last_activity_ts (direct_api_call
-            # heartbeat), so it never looks stale at the idle threshold.
+            # heartbeat), so it never looks stale at the idle threshold. A
+            # stale-kill/reconnect also refreshes that clock, but it is the
+            # failure being watched for, not evidence that the child made
+            # progress. Keep the timestamp so one kill is counted once, while
+            # retaining the stale counter across repeated recovery attempts.
             activity_advanced = child_activity_ts is not None and (
                 last_seen["ts"] is None or child_activity_ts > last_seen["ts"]
             )
-            if child_iter > last_seen["iter"] or child_tool != last_seen["tool"] or activity_advanced:
+            stale_retry_activity = (
+                "stale" in child_activity_desc.lower()
+                and any(marker in child_activity_desc.lower() for marker in ("kill", "retry", "reconnect"))
+            )
+            if child_activity_ts is not None and activity_advanced:
+                last_seen["ts"] = child_activity_ts
+            if child_iter > last_seen["iter"] or child_tool != last_seen["tool"] or (
+                activity_advanced and not stale_retry_activity
+            ):
                 last_seen.update(iter=child_iter, tool=child_tool, stale=0)
-                if child_activity_ts is not None:
-                    last_seen["ts"] = child_activity_ts
             else:
                 last_seen["stale"] += 1
             stale_cycles = _HEARTBEAT_STALE_CYCLES_IN_TOOL if child_tool else _HEARTBEAT_STALE_CYCLES_IDLE
