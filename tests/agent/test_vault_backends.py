@@ -231,3 +231,27 @@ def test_onepassword_backend_env_forwards_config_directory(monkeypatch):
     backend = OnePasswordLoginBackend({"enabled": True})
 
     assert backend._env(None)["OP_CONFIG_DIR"] == "/tmp/op-config"
+
+
+def test_onepassword_service_account_passes_item_vault_to_reads():
+    from agent.vault_backends.onepassword import OnePasswordLoginBackend
+
+    backend = OnePasswordLoginBackend({"enabled": True})
+    backend._service_token = "service-token"
+    items_json = json.dumps([{
+        "id": "item-1", "title": "Example", "created_at": "2026-01-01T00:00:00Z",
+        "vault": {"name": "Hermes Automation"},
+        "urls": [{"href": "https://example.com"}],
+    }])
+    with patch.object(OnePasswordLoginBackend, "is_unlocked", return_value=True), \
+         patch.object(backend, "_run", side_effect=[items_json, "secret\n", "123456\n"]) as run:
+        backend.list_items()
+        assert backend.resolve_password("op:item-1") == "secret"
+        assert backend.resolve_otp("op:item-1") == "123456"
+
+    assert run.call_args_list[1].args == (
+        "item", "get", "item-1", "--vault", "Hermes Automation", "--fields", "label=password", "--reveal",
+    )
+    assert run.call_args_list[2].args == (
+        "item", "get", "item-1", "--vault", "Hermes Automation", "--otp",
+    )

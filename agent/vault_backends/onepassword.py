@@ -38,6 +38,7 @@ class OnePasswordLoginBackend(LoginBackend):
         from agent.secret_scope import get_secret
         env_name = str(self.cfg.get("service_account_token_env") or "OP_SERVICE_ACCOUNT_TOKEN")
         self._service_token = get_secret(env_name, "") or ""
+        self._item_vaults: Dict[str, str] = {}
 
     # ── auth ────────────────────────────────────────────────────────────────
 
@@ -104,29 +105,47 @@ class OnePasswordLoginBackend(LoginBackend):
         raw = json.loads(self._run("item", "list", "--categories", "Login", "--format", "json") or "[]")
         out: List[VaultItemMeta] = []
         for item in raw if isinstance(raw, list) else []:
+            item_id = str(item.get("id") or "")
+            vault = item.get("vault")
+            if item_id and isinstance(vault, dict) and vault.get("name"):
+                self._item_vaults[item_id] = str(vault["name"])
             urls = [str(u["href"]) for u in item.get("urls") or [] if isinstance(u, dict) and u.get("href")]
             origins = _all_origins(urls)
             if not origins:
                 continue
             username = str(item.get("additional_information") or "").strip() or None
             out.append(VaultItemMeta(
-                id=f"{self.prefix}{item.get('id')}", kind="login", label=str(item.get("title") or origins[0]),
+                id=f"{self.prefix}{item_id}", kind="login", label=str(item.get("title") or origins[0]),
                 origin=origins[0], created_at=str(item.get("created_at") or ""),
                 identifier_type="username" if username else None, identifier=username,
                 allowed_origins=_web_origins(origins)))
         return out
+
+    def _vault_flags_for_item(self, item_id: str) -> List[str]:
+        if not self._service_token:
+            return []
+        vault_name = self._item_vaults.get(item_id)
+        if not vault_name:
+            raise RuntimeError(
+                f"1Password vault metadata unavailable for item {item_id}; refresh the vault item list"
+            )
+        return ["--vault", vault_name]
 
     def get_meta(self, handle: str) -> Optional[VaultItemMeta]:
         return next((m for m in self.list_items() if m.id == handle), None)
 
     def resolve_password(self, handle: str) -> str:
         item_id = handle[len(self.prefix):]
-        return self._run("item", "get", item_id, "--fields", "label=password", "--reveal").rstrip("\r\n")
+        return self._run(
+            "item", "get", item_id, *self._vault_flags_for_item(item_id),
+            "--fields", "label=password", "--reveal",
+        ).rstrip("\r\n")
 
     def resolve_otp(self, handle: str) -> Optional[str]:
         # `--otp` mints the current TOTP from the item's one-time-password field; items without one error out.
         try:
-            code = self._run("item", "get", handle[len(self.prefix):], "--otp").strip()
+            item_id = handle[len(self.prefix):]
+            code = self._run("item", "get", item_id, *self._vault_flags_for_item(item_id), "--otp").strip()
         except Exception:
             return None
         return code if code.isdigit() else None
