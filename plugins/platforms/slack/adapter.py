@@ -4159,6 +4159,21 @@ class SlackAdapter(BasePlatformAdapter):
         runner = getattr(getattr(self, "_message_handler", None), "__self__", None)
         return getattr(runner, "_is_user_authorized", None)
 
+    def _should_pass_unauthorized_dm(self, channel_id: str) -> bool:
+        """Whether an unauthorized 1:1 DM must reach the gateway for a reply."""
+        runner = (getattr(getattr(self, "_message_handler", None), "__self__", None)
+                  or getattr(self, "gateway_runner", None))
+        behavior_fn = getattr(runner, "_get_unauthorized_dm_behavior", None)
+        if callable(behavior_fn):
+            try:
+                source = self.build_source(chat_id=channel_id, chat_name="", chat_type="dm", user_id="", user_name="")
+                profile = getattr(source, "profile", None) or getattr(self, "_owner_profile", None)
+                return behavior_fn(Platform.SLACK, profile=profile) != "ignore"
+            except Exception:
+                logger.debug("[Slack] Failed to resolve unauthorized DM behavior", exc_info=True)
+        extra = getattr(getattr(self, "config", None), "extra", None) or {}
+        return str(extra.get("unauthorized_dm_behavior", "")).strip().lower() in {"pair", "decline"}
+
     def _early_reject_unauthorized(self, user_id: str, channel_id: str, is_dm: bool) -> bool:
         """True (logged) when the sender is definitively unauthorized. Injected profile-bound check
         first (works under multiplex, where the handler has no ``__self__``), then runner
@@ -4177,6 +4192,10 @@ class SlackAdapter(BasePlatformAdapter):
         if decision is False:
             logger.warning(
                 "[Slack] Early reject of unauthorized user %s in channel %s", user_id, channel_id)
+            # A 1:1 DM may need the gateway's pairing/decline response. Keep channels,
+            # group DMs, and the explicit ignore behavior on the cheap drop path.
+            if is_dm and channel_id.startswith("D") and self._should_pass_unauthorized_dm(channel_id):
+                return False
         return decision is False
 
     async def _channel_gate_allows(
