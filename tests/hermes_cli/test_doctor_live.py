@@ -145,13 +145,18 @@ class TestConfiguredOnlySelection:
         results = {r.name: r for r in run_live_checks([])}
         assert results["STT"].status == "warn"
 
-    def test_browser_probed_when_available(self, monkeypatch):
-        monkeypatch.setattr(doctor_live, "_browser_available", lambda: True)
-        monkeypatch.setattr(
-            doctor_live, "_launch_browser_probe",
-            lambda timeout: (True, "about:blank ok"))
-        results = {r.name: r for r in run_live_checks([])}
-        assert results["Browser"].status == "pass"
+    def test_browser_probe_uses_configured_agent_browser(self, monkeypatch):
+        calls = []
+
+        def _run(task_id, command, args=None, timeout=None):
+            calls.append((task_id, command, args, timeout))
+            return {"success": True}
+
+        monkeypatch.setattr("tools.browser_tool_session._run_browser_command", _run)
+        assert doctor_live._launch_browser_probe(3) == (True, "launched + about:blank + closed")
+        assert [call[1] for call in calls] == ["open", "close"]
+        assert calls[0][2] == ["about:blank"]
+        assert calls[0][3] == 5
 
 
 class TestBrowserAvailable:

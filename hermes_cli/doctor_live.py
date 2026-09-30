@@ -10,7 +10,6 @@ import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
-from hermes_cli.browser_runtime import chromium_executable
 from hermes_cli.doctor import _section, check_info
 from hermes_cli.doctor_report import check_fail, check_ok, check_warn
 
@@ -57,22 +56,21 @@ def _browser_available() -> bool:
 
 
 def _launch_browser_probe(timeout: float) -> tuple:
-    """Launch a browser, open about:blank, close. Returns (ok, detail). Uses Playwright directly (what
-    agent-browser drives underneath) so the probe owns the full lifecycle and always cleans up."""
+    """Exercise the configured agent-browser backend with a bounded smoke test."""
+    from tools.browser_tool_session import _run_browser_command
+
+    task_id = f"doctor-live-{os.getpid()}"
+    command_timeout = max(5, int(timeout))
+    opened = False
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return (False, "playwright not installed")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            channel="chromium", executable_path=chromium_executable(),
-            headless=True, timeout=timeout * 1000,
-        )
-        try:
-            browser.new_page().goto("about:blank", timeout=timeout * 1000)
-        finally:
-            browser.close()
-    return (True, "launched + about:blank + closed")
+        result = _run_browser_command(task_id, "open", ["about:blank"], timeout=command_timeout)
+        if result.get("success") is False:
+            return (False, result.get("error") or "browser open failed")
+        opened = True
+        return (True, "launched + about:blank + closed")
+    finally:
+        if opened:
+            _run_browser_command(task_id, "close", timeout=command_timeout)
 
 
 def _probe_mcp_server(name: str, config: dict, timeout: float):
