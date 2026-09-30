@@ -1828,11 +1828,16 @@ def resolve_channel_skills(
     bindings = config_extra.get("channel_skill_bindings") or []
     if not isinstance(bindings, list) or not bindings:
         return None
-    ids_to_check = {str(key) for key in (channel_id, parent_id) if key}
+    ids_to_check = tuple(str(key) for key in (channel_id, parent_id) if key)
     if not ids_to_check:
         return None
-    for entry in bindings:
-        if not isinstance(entry, dict) or str(entry.get("id", "")) not in ids_to_check:
+    for binding_id in ids_to_check:
+        entry = next(
+            (candidate for candidate in bindings
+             if isinstance(candidate, dict) and str(candidate.get("id", "")) == binding_id),
+            None,
+        )
+        if entry is None:
             continue
         skills = entry.get("skills") or entry.get("skill")
         if isinstance(skills, str):
