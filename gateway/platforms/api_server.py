@@ -3662,6 +3662,24 @@ class APIServerAdapter(OpenAICompatRoutesMixin, BasePlatformAdapter):
                     else event_type
                 )
                 events.enqueue(event_name, {"message_id": message_id, "tool_name": tool_name, "preview": preview, "args": args})
+            elif event_type in {"subagent.start", "subagent.complete"}:
+                # Keep session chat parity with /v1/runs.  Lifecycle events are the
+                # intentionally always-on, low-volume signal for delegated work.
+                from gateway.platforms.api_server_runs import (
+                    _SUBAGENT_EVENT_KEYS, _SUBAGENT_TEXT_KEYS,
+                )
+                payload = {"message_id": message_id}
+                if preview is not None:
+                    payload["preview"] = self.redact_sensitive_text(str(preview), force=True)
+                for key in _SUBAGENT_EVENT_KEYS:
+                    value = kwargs.get(key)
+                    if value is not None:
+                        payload[key] = (
+                            self.redact_sensitive_text(value, force=True)
+                            if key in _SUBAGENT_TEXT_KEYS and isinstance(value, str)
+                            else value
+                        )
+                events.enqueue(event_type, payload)
 
         def _commentary(text: str, *, already_streamed: bool = False) -> None:
             # Mid-turn assistant commentary (Codex ``phase="commentary"``, text beside tool calls)
