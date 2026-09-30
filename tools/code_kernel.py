@@ -213,6 +213,14 @@ def main():
         except ValueError:
             continue
         execution_count += 1
+        requested_cwd = request.get("cwd")
+        if requested_cwd:
+            try:
+                os.chdir(requested_cwd)
+            except OSError as exc:
+                _reply({"status": "error", "error": f"Could not change kernel cwd: {exc}",
+                        "execution_count": execution_count})
+                continue
         payload, full_stdout = run_cell(request, execution_count)
         payload["stdout_spill_path"] = (
             _spill(full_stdout, "cell_%06d_stdout.txt" % execution_count)
@@ -851,9 +859,13 @@ def execute_in_session_kernel(
     code: str, *, task_id: str, mode: str, child_python: str, child_cwd: str,
     sandbox_tools: frozenset, timeout: int, max_tool_calls: int, reset: bool, is_interrupted,
 ) -> str:
-    """Run one cell in the (owner, mode, python, cwd, tools) session kernel. The owner is the
-    session key (``_resolve_owner``), not the per-turn task id, so state survives across turns."""
-    key = (_resolve_owner(task_id) or "", mode, child_python, child_cwd, tuple(sorted(sandbox_tools)))
+    """Run one cell in the session kernel. The owner is the session key
+    (``_resolve_owner``), not the per-turn task id, so state survives across turns.
+
+    The kernel process follows the current session cwd per cell; cwd is deliberately not part of
+    the identity because changing directories must not discard the interpreter state.
+    """
+    key = (_resolve_owner(task_id) or "", mode, child_python, tuple(sorted(sandbox_tools)))
     exec_start = time.monotonic()
     from agent.delegation_context import is_delegated_child_context
     kernel, state_reset = _acquire_kernel(key, reset, pinned=is_delegated_child_context())
@@ -890,7 +902,8 @@ def _run_cell(kernel: SessionKernel, key: Tuple, code: str, *, task_id: str, chi
             kernel.cell_log_start = len(kernel.tool_call_log)
             kernel.raw.drain(), kernel.stderr.drain()  # raw output leaked between cells belongs to no cell
             kernel.cell_authority = authority
-            kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code}) + "\n").encode("utf-8"))
+            kernel.proc.stdin.write((json.dumps({"id": uuid.uuid4().hex, "code": code,
+                                                   "cwd": child_cwd}) + "\n").encode("utf-8"))
             kernel.proc.stdin.flush()
             status, payload = _await_cell(kernel, timeout, is_interrupted)
             result = _cell_result(
