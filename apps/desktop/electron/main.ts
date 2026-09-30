@@ -8236,17 +8236,48 @@ function gatewayFileRequestPath(
     : pathWithGlobalRemoteProfile(requestPath, profile, profileRouteOptions(profile))
 }
 
+function ipcErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === 'string' && error) return error
+  return 'The gateway file could not be downloaded'
+}
+
+async function resolveGatewayFileBackendWithTimeout<T>(
+  payload: GatewayFileSavePayload,
+  timeoutMs = 30_000
+): Promise<Awaited<ReturnType<typeof resolveGatewayFileBackend<T>>>> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      resolveGatewayFileBackend<T>(payload, {
+        ensureLegacy: ensureBackend,
+        ensureRegistry: ensureRegistryBackend
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Timed out while connecting to the gateway')), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 async function saveGatewayFile(payload: GatewayFileSavePayload = {}): Promise<GatewayFileSaveResult> {
+  try {
+    return await saveGatewayFileUnsafe(payload)
+  } catch (error) {
+    return { saved: false, error: ipcErrorMessage(error) }
+  }
+}
+
+async function saveGatewayFileUnsafe(payload: GatewayFileSavePayload = {}): Promise<GatewayFileSaveResult> {
   const filePath = gatewayFilePath(payload.path)
 
   if (!filePath) {
     throw new Error('Missing gateway file path')
   }
 
-  const { connection, connectionId, profile } = await resolveGatewayFileBackend<GatewayFileConnection>(payload, {
-    ensureLegacy: ensureBackend,
-    ensureRegistry: ensureRegistryBackend
-  })
+  const { connection, connectionId, profile } = await resolveGatewayFileBackendWithTimeout<GatewayFileConnection>(payload)
 
   const suggested = String(payload.suggestedName || '').trim()
   const fallbackName = path.basename(filePath) || suggested || 'download'
@@ -8259,8 +8290,10 @@ async function saveGatewayFile(payload: GatewayFileSavePayload = {}): Promise<Ga
   )
 
   const deps: GatewayFileSaveDeps = {
-    showSaveDialog: (options: GatewaySaveDialogOptions): Promise<GatewaySaveDialogResult> =>
-      dialog.showSaveDialog(mainWindow, options)
+    showSaveDialog: async (options: GatewaySaveDialogOptions): Promise<GatewaySaveDialogResult> => {
+      if (!mainWindow || mainWindow.isDestroyed()) return { canceled: true }
+      return dialog.showSaveDialog(mainWindow, options)
+    }
   }
 
   return saveGatewayDownload(requestPaths, ctx, {
