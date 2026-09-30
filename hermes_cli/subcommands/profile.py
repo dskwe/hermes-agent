@@ -49,6 +49,15 @@ def build_profile_parser(subparsers, *, cmd_profile: Callable) -> None:
              "Used by the kanban decomposer to route tasks based on role instead "
              "of profile name alone. Skip and add later via `hermes profile describe`.")
 
+    profile_configure = profile_subparsers.add_parser(
+        "configure", help="Update a profile's identity files through the supported CLI surface",
+        description="Replace SOUL.md, MEMORY.md, or USER.md atomically. This explicit CLI action "
+            "is the authorized persona-management surface; it does not relax agent file-write guards.")
+    profile_configure.add_argument("profile_name", help="Profile to configure")
+    profile_configure.add_argument("--soul-file", metavar="PATH", help="Source file for SOUL.md")
+    profile_configure.add_argument("--memory-file", metavar="PATH", help="Source file for MEMORY.md")
+    profile_configure.add_argument("--user-file", metavar="PATH", help="Source file for USER.md")
+
     profile_delete = profile_subparsers.add_parser("delete", help="Delete a profile")
     profile_delete.add_argument("profile_name", help="Profile to delete")
     profile_delete.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt")

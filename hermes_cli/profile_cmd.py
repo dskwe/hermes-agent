@@ -287,6 +287,55 @@ def _profile_create(args):
     print()
 
 
+def _profile_configure(args):
+    """Atomically update explicitly selected identity files for an existing profile."""
+    import tempfile
+
+    from hermes_cli.profiles import get_profile_dir, profile_exists
+
+    if not profile_exists(args.profile_name):
+        _die(f"Error: Profile '{args.profile_name}' does not exist.")
+    requested = {
+        "SOUL.md": getattr(args, "soul_file", None),
+        "MEMORY.md": getattr(args, "memory_file", None),
+        "USER.md": getattr(args, "user_file", None),
+    }
+    selected = {name: Path(source).expanduser() for name, source in requested.items() if source}
+    if not selected:
+        _die("Error: provide at least one of --soul-file, --memory-file, or --user-file", err=True)
+
+    profile_dir = get_profile_dir(args.profile_name)
+    contents = {}
+    for name, source in selected.items():
+        if not source.is_file():
+            _die(f"Error: source file does not exist: {source}", err=True)
+        try:
+            contents[name] = source.read_bytes()
+        except OSError as exc:
+            _die(f"Error: cannot read source file {source}: {exc}", err=True)
+
+    for name, content in contents.items():
+        target = profile_dir / name
+        staged_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=profile_dir, prefix=f".{name}.", suffix=".tmp", delete=False
+            ) as staged:
+                staged.write(content)
+                staged.flush()
+                os.fsync(staged.fileno())
+                staged_path = Path(staged.name)
+            os.replace(staged_path, target)
+        except OSError as exc:
+            if staged_path is not None:
+                try:
+                    staged_path.unlink()
+                except OSError:
+                    pass
+            _die(f"Error: could not update {target}: {exc}", err=True)
+    print(f"Updated {', '.join(contents)} for '{args.profile_name}'.")
+
+
 def _profile_delete(args):
     from hermes_cli.profiles import delete_profile
     try:
@@ -605,6 +654,7 @@ PROFILE_ACTIONS = {
     'list': _profile_list,
     'use': _profile_use,
     'create': _profile_create,
+    'configure': _profile_configure,
     'delete': _profile_delete,
     'describe': _profile_describe,
     'show': _profile_show,
