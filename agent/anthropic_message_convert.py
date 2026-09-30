@@ -568,8 +568,9 @@ def _manage_thinking_signatures(result: List[Dict[str, Any]], base_url: str | No
     """Strip or preserve thinking blocks per endpoint. Mutates ``result`` in place.
 
     Anthropic signs thinking blocks against the full turn; any upstream mutation invalidates them
-    (400 "Invalid signature in thinking block"), so on direct Anthropic only the LATEST assistant
-    turn keeps signed blocks. Signatures are proprietary: third-party endpoints strip all thinking.
+    (400 "Invalid signature in thinking block"). Native Anthropic and Nous Portal replay all
+    assistant turns with the same keep-valid/demote-unsigned policy; signatures are proprietary,
+    so third-party endpoints strip all thinking.
     Kimi replays as-is; DeepSeek needs unsigned blocks round-tripped but rejects signed ones. Nous
     Portal proxies Claude with sticky sessions and validates the same signatures, so it takes the
     native path despite not being anthropic.com.
@@ -579,8 +580,7 @@ def _manage_thinking_signatures(result: List[Dict[str, Any]], base_url: str | No
     is_deepseek = _is_deepseek_anthropic_endpoint(base_url) or (
         is_third_party and _model_name_is_deepseek_thinking(model)
     )
-    last_assistant_idx = next((i for i in range(len(result) - 1, -1, -1) if result[i].get("role") == "assistant"), None)
-    for idx, m in _assistant_block_lists(result):
+    for _, m in _assistant_block_lists(result):
         if is_kimi:
             pass  # shared cleanup below still strips cache markers + the flag
         elif is_deepseek:
@@ -590,7 +590,7 @@ def _manage_thinking_signatures(result: List[Dict[str, Any]], base_url: str | No
                 if _block_type(b) not in _THINKING_TYPES or not (b.get("signature") or b.get("data"))
             ]
             m["content"] = new_content or [_text_block("(empty)")]
-        elif is_third_party or idx != last_assistant_idx:
+        elif is_third_party:
             m["content"] = _strip_thinking(m["content"]) or [_text_block("(thinking elided)")]
         else:
             new_content = _keep_valid_latest_thinking(m["content"], bool(m.get("_thinking_signature_invalidated")))
