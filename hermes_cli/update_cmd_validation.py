@@ -45,6 +45,9 @@ def _critical_module_import_failures(
         "        if %r:\n"
         "            failures.append((name, type(exc).__name__, str(exc)))\n"
         "    except BaseException as exc:\n"
+        # A successful updater handoff exits the probe with SystemExit(0); that is not an import failure.
+        "        if isinstance(exc, SystemExit) and exc.code == 0:\n"
+        "            continue\n"
         "        failures.append((name, type(exc).__name__, str(exc)))\n"
         "sys.stdout.write('\\n%s' + json.dumps(failures))\n"
         % (_UPDATE_CRITICAL_MODULES, tuple(sorted(FIRST_PARTY_MODULE_ROOTS)), report_runtime_errors,

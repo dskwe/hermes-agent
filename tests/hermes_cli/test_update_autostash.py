@@ -111,6 +111,7 @@ def test_rescue_retention_uses_real_refs(tmp_path, monkeypatch, mode):
     ('preexisting', 'VALUE = 2\n', ('first',), None),
     ('later', "raise RuntimeError('restored later failure')\n", ('first', 'consumer'), 'restored later failure'),
     ('exit', "raise SystemExit('restored exit')\n", ('first', 'consumer'), 'restored exit'),
+    ('successful-exit', 'raise SystemExit(0)\n', ('first', 'consumer'), None),
     ('terminated', 'import os\nos._exit(7)\n', ('consumer',), 'exit code 7'),
     ('paths', 'VALUE = 2\n', (), 'restored Python source discovery'),
 ])
