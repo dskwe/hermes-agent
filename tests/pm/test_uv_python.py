@@ -210,6 +210,9 @@ def test_bundled_uv_uses_a_verified_writable_python_without_changing_runtime(ins
     binary = entry / "python.exe"
     binary.write_bytes(b"pinned interpreter")
     (entry / "python.dll").write_bytes(b"pinned runtime")
+    pycache = entry / "Lib" / "site-packages" / "pip" / "_internal" / "operations" / "build" / "__pycache__"
+    pycache.mkdir(parents=True)
+    (pycache / "metadata_editable.cpython-314.pyc").write_bytes(b"runtime cache")
     facts.record("python", "test", entry.name, python.env(entry, target), shipped,
                  target=target, artifacts=[digest], digest=tree_digest(entry))
     before = facts.path.read_bytes()
@@ -231,6 +234,7 @@ def test_bundled_uv_uses_a_verified_writable_python_without_changing_runtime(ins
     assert resolved_uv == uv_binary
     assert python == copied / "python.exe"
     assert tree_digest(copied) == shipped_digest
+    assert not (copied / "Lib" / "site-packages" / "pip" / "_internal" / "operations" / "build" / "__pycache__").exists()
     copied_fact = Facts(writable / "facts.json").get("python")
     assert copied_fact["digest"] == shipped_digest
     assert copied_fact["artifacts"] == [digest]
