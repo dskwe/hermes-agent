@@ -10,6 +10,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -773,6 +774,8 @@ _SKILL_COUNT_LOCK = threading.Lock()
 # One scan lock per skills dir so concurrent cold scans of the SAME profile share one walk
 # while different profiles' scans still run in parallel.
 _SKILL_COUNT_SCAN_LOCKS: dict[str, threading.Lock] = {}
+_PROFILE_CREATE_LOCKS: dict[str, threading.Lock] = {}
+_PROFILE_CREATE_LOCKS_GUARD = threading.Lock()
 
 
 def _skills_dir_signature(skills_dir: Path) -> float:
@@ -1281,7 +1284,7 @@ def _bootstrap_profile_dir(profile_dir: Path, source_dir: Optional[Path],
         _clone_file(source_dir, profile_dir, SYNC_MANIFEST_NAME)
 
 
-def create_profile(
+def _create_profile_unlocked(
     name: str, clone_from: Optional[str] = None, clone_all: bool = False, clone_config: bool = False,
     no_alias: bool = False, no_skills: bool = False, description: Optional[str] = None,
     clone_channels: bool = False, sync_imports: bool = False,
@@ -1365,15 +1368,25 @@ def create_profile(
 
 
 def _clone_staging_dir(profile_dir: Path) -> Path:
-    """Fresh ``profiles/.<name>.staging-<pid>`` beside the final dir (same filesystem, so the publish
-    rename is atomic). A leftover from a crashed create is discarded."""
-    staging = profile_dir.parent / f".{profile_dir.name}.staging-{os.getpid()}"
+    """Create a unique staging directory beside the final dir on the same filesystem."""
     profile_dir.parent.mkdir(parents=True, exist_ok=True)
-    if staging.is_symlink() or staging.is_file():
-        staging.unlink()
-    elif staging.is_dir():
-        shutil.rmtree(staging, ignore_errors=True)
-    return staging
+    return Path(tempfile.mkdtemp(prefix=f".{profile_dir.name}.staging-", dir=profile_dir.parent))
+
+
+def create_profile(
+    name: str, clone_from: Optional[str] = None, clone_all: bool = False, clone_config: bool = False,
+    no_alias: bool = False, no_skills: bool = False, description: Optional[str] = None,
+    clone_channels: bool = False, sync_imports: bool = False,
+) -> Path:
+    canon = _canon_valid(name)
+    with _PROFILE_CREATE_LOCKS_GUARD:
+        lock = _PROFILE_CREATE_LOCKS.setdefault(canon, threading.Lock())
+    with lock:
+        return _create_profile_unlocked(
+            name, clone_from=clone_from, clone_all=clone_all, clone_config=clone_config,
+            no_alias=no_alias, no_skills=no_skills, description=description,
+            clone_channels=clone_channels, sync_imports=sync_imports,
+        )
 
 
 def _finish_profile_layout(profile_dir: Path, *, no_skills: bool, clone_all: bool,
