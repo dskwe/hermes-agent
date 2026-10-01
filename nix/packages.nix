@@ -34,9 +34,18 @@
       branch = if rawRef != null then builtins.replaceStrings [ "refs/heads/" ] [ "" ] rawRef else null;
       dirty = dirtyRevision != null;
       lastModified = inputs.self.lastModified or null;
+      # The source package intentionally keeps pyproject.toml at 0.0.0; release
+      # stamping happens outside the checkout. Nix builds do not retain .git, so
+      # use the release identity shipped with the source as the stamp base.
+      releaseVersion =
+        let
+          match = builtins.match ''.*__release_date__ = "([^"]+)".*'' (builtins.readFile ../hermes_cli/__init__.py);
+        in
+        if match != null then builtins.elemAt match 0 else "0.0.0";
       minimal = pkgs.callPackage ./hermes-agent.nix {
         inherit (inputs) uv2nix pyproject-nix pyproject-build-systems;
         npm-lockfile-fix = inputs'.npm-lockfile-fix.packages.default;
+        version = releaseVersion;
         inherit
           rev
           branch
