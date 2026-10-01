@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import contextlib
 import contextvars
 import inspect
@@ -343,6 +344,8 @@ class ManagedLlmStream(Iterator[Any]):
         raw_stream = None
         try:
             raw_stream = run_callback(self._stream_factory, attempt.provider_request(next_request))
+            if inspect.isawaitable(raw_stream):
+                raw_stream = await raw_stream
             predicate = self._completed_response_predicate
             if predicate is not None and run_callback(predicate, raw_stream):
                 self.final_response = raw_stream
@@ -350,17 +353,25 @@ class ManagedLlmStream(Iterator[Any]):
                 return
             if self._on_stream_created is not None:
                 run_callback(self._on_stream_created, raw_stream)
-            raw_iterator = run_callback(iter, raw_stream)
-            while True:
-                try:
-                    chunk = run_callback(next, raw_iterator)
-                except StopIteration:
-                    break
-                if self._accept_chunk is not None and not run_callback(self._accept_chunk, chunk):
-                    break
-                encoded_chunk = _jsonable(chunk)
-                self._raw_chunks.append((encoded_chunk, chunk))
-                yield encoded_chunk
+            if hasattr(raw_stream, "__aiter__"):
+                async for chunk in raw_stream:
+                    if self._accept_chunk is not None and not run_callback(self._accept_chunk, chunk):
+                        break
+                    encoded_chunk = _jsonable(chunk)
+                    self._raw_chunks.append((encoded_chunk, chunk))
+                    yield encoded_chunk
+            else:
+                raw_iterator = run_callback(iter, raw_stream)
+                while True:
+                    try:
+                        chunk = run_callback(next, raw_iterator)
+                    except StopIteration:
+                        break
+                    if self._accept_chunk is not None and not run_callback(self._accept_chunk, chunk):
+                        break
+                    encoded_chunk = _jsonable(chunk)
+                    self._raw_chunks.append((encoded_chunk, chunk))
+                    yield encoded_chunk
             self._provider_completed = True
         except BaseException as exc:
             self._callback_error = exc

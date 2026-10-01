@@ -2605,7 +2605,7 @@ def _relay_auxiliary_metadata(
     provider_name = str(provider or context.get("provider") or "auxiliary")
     model_name = str(context.get("model") or "unknown")
     return provider_name, model_name, {
-        "api_mode": str(api_mode or context.get("api_mode") or "chat_completions"),
+        "api_mode": "chat_completions",
         "api_request_id": str(context["request_id"]),
         "call_role": f"auxiliary:{context['task']}",
         "retry_count": attempt_count,
