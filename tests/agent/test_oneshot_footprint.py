@@ -63,3 +63,23 @@ def test_oneshot_delegation_budget_charges_total_children_then_refuses(oneshot, 
     # Interactive sessions are never charged, whatever the count.
     monkeypatch.delenv("HERMES_SINGLE_QUERY_SESSION")
     assert delegate_tool._oneshot_spawn_budget(parent, 50) is None
+
+
+def test_kanban_worker_is_not_charged_one_shot_delegation_budget(oneshot, monkeypatch):
+    from tools import delegate_tool
+
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-123")
+    monkeypatch.setattr(delegate_tool, "_get_oneshot_max_children", lambda: 2)
+    parent = type("P", (), {})()
+    assert delegate_tool._oneshot_spawn_budget(parent, 3) is None
+    assert not hasattr(parent, "_oneshot_children_spawned")
+
+
+def test_delegated_child_inherited_kanban_marker_keeps_one_shot_budget(oneshot, monkeypatch):
+    from tools import delegate_tool
+
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "task-123")
+    monkeypatch.setenv("HERMES_DELEGATED_CHILD_CONTEXT", "1")
+    monkeypatch.setattr(delegate_tool, "_get_oneshot_max_children", lambda: 2)
+    parent = type("P", (), {})()
+    assert delegate_tool._oneshot_spawn_budget(parent, 3)
