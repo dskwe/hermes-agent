@@ -28,6 +28,7 @@ from gateway.restart import (
     resolve_systemd_timeout_stop_sec,
 )
 from tests.gateway.restart_test_helpers import make_restart_runner
+from gateway.run_shutdown import _restart_stop_drain_timeout
 
 
 @pytest.fixture(autouse=True)
@@ -181,3 +182,21 @@ class TestResolveSystemdTimeoutStopSec:
 
     def test_garbage_inputs_degrade_to_the_floor(self):
         assert resolve_systemd_timeout_stop_sec("soon", None) == 60
+
+
+class TestRestartCronDrainCap:
+    def test_restart_keeps_cron_under_announced_after_turn_cap(self):
+        runner = type("Runner", (), {})()
+        runner._restart_requested = True
+        runner._restart_after_turn_timeout = 1800
+        runner._active_cron_job_count = lambda: 1
+
+        assert _restart_stop_drain_timeout(runner, 180.0) == 1800.0
+
+    def test_chat_only_restart_keeps_configured_drain(self):
+        runner = type("Runner", (), {})()
+        runner._restart_requested = True
+        runner._restart_after_turn_timeout = 1800
+        runner._active_cron_job_count = lambda: 0
+
+        assert _restart_stop_drain_timeout(runner, 180.0) == 180.0

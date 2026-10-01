@@ -161,11 +161,35 @@ def _delivery_target_key(platform_value: str, chat_id, thread_id, *, profile: Op
     return _notice_target_key(platform_value, chat_id, thread_id)
 
 
+def _restart_stop_drain_timeout(runner: object, timeout: float) -> float:
+    """Keep a restart's cron drain under the cap announced by the restart wait.
+
+    Cron work is not always visible to the restart wait because its registry is maintained by
+    the scheduler worker. If it reaches ``stop()`` after that wait expires, the ordinary
+    ``restart_drain_timeout`` would immediately kill it despite the announced
+    ``restart_after_turn_timeout`` cap. Extend only restart stops that still have cron work;
+    chat-only stops retain the configured interrupt budget.
+    """
+    if not getattr(runner, "_restart_requested", False):
+        return timeout
+    try:
+        if runner._active_cron_job_count() <= 0:
+            return timeout
+    except Exception:
+        return timeout
+    try:
+        after_turn = max(0.0, float(getattr(runner, "_restart_after_turn_timeout", 0.0) or 0.0))
+    except (TypeError, ValueError):
+        after_turn = 0.0
+    return max(timeout, after_turn)
+
+
 def _effective_watchdog_leash(runner: object) -> float:
     """Thread-watchdog leash for the stop in progress: effective drain + grace, clamped under
     launchd's live ``ExitTimeOut`` minus the dump margin. Lives here (not in gateway.restart)
     because restart.py cannot import shutdown_watchdog without a cycle."""
-    return effective_stop_watchdog_delay(runner, resolve_shutdown_watchdog_delay(effective_stop_drain_timeout(runner)))
+    timeout = _restart_stop_drain_timeout(runner, effective_stop_drain_timeout(runner))
+    return effective_stop_watchdog_delay(runner, resolve_shutdown_watchdog_delay(timeout))
 
 
 class GatewayShutdownMixin:
@@ -2202,7 +2226,7 @@ class GatewayShutdownMixin:
             )
         try:
             await GatewayRunner._stop_begin_teardown(self, ctx)
-            timeout = effective_stop_drain_timeout(self)
+            timeout = _restart_stop_drain_timeout(self, effective_stop_drain_timeout(self))
             if timeout < self._restart_drain_timeout:
                 logger.warning(
                     "Shutdown drain capped to %.0fs (configured %.0fs) to fit the live launchd exit "
