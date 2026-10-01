@@ -109,19 +109,33 @@ def _profile_list(args):
     from hermes_cli.profiles import format_profile_label, get_active_profile_name, list_profiles
     profiles = list_profiles()
     active = get_active_profile_name()
+    import shutil, subprocess, sys
+    scopes = {}
+    if sys.platform == "linux" and shutil.which("systemctl"):
+        for scope, cmd in (("user", ["systemctl", "--user"]), ("system", ["systemctl"])):
+            try:
+                out = subprocess.run(cmd + ["list-unit-files", "hermes-gateway*.service", "--no-legend", "--no-pager"], capture_output=True, text=True, check=False, timeout=5).stdout
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            for line in out.splitlines():
+                unit = line.split()[0] if line.split() else ""
+                if unit.startswith("hermes-gateway") and unit.endswith(".service"):
+                    name = unit[14:-8].lstrip("-") or "default"
+                    if any(x.name == name for x in profiles): scopes.setdefault(name, scope)
     if not profiles:
         print("No profiles found.")
         return
-    print(f"\n {'Profile':<16} {'Model':<28} {'Gateway':<12} {'Alias':<12} {'Distribution'}")
-    print(f" {'─' * 15}    {'─' * 27}    {'─' * 11}    {'─' * 11}    {'─' * 20}")
+    print(f"\n {'Profile':<16} {'Model':<28} {'Gateway':<12} {'Scope':<8} {'Alias':<12} {'Distribution'}")
+    print(f" {'─' * 16} {'─' * 28} {'─' * 12} {'─' * 8} {'─' * 12} {'─' * 30}")
     for p in profiles:
         marker = " ◆" if _is_active(p, active) else "  "
         name = format_profile_label(p.name, p.display_name)
         model = (p.model or "—")[:26]
         gw = "running" if p.gateway_running else "stopped"
+        scope = scopes.get(p.name, "—")
         alias = (p.alias_name or p.name) if p.alias_path and not p.is_default else "—"
         dist = f"{p.distribution_name}@{p.distribution_version or '?'}"[:30] if p.distribution_name else "—"
-        print(f"{marker}{name:<15} {model:<28} {gw:<12} {alias:<12} {dist}")
+        print(f"{marker}{name:<15} {model:<28} {gw:<12} {scope:<8} {alias:<12} {dist}")
     print()
     for line in _shared_credential_warnings(profiles):
         print(line)
