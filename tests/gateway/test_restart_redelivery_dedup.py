@@ -161,3 +161,26 @@ async def test_marker_missing_but_booted_from_restart_ignores_redelivery(tmp_pat
     assert runner._booted_from_restart is False
 
 
+
+
+@pytest.mark.asyncio
+async def test_restart_marker_from_another_telegram_bot_does_not_block(tmp_path, monkeypatch):
+    """Update IDs from a different receiving bot are not redeliveries."""
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    (tmp_path / ".restart_last_processed.json").write_text(json.dumps({
+        "platform": "telegram",
+        "transport_profile": "alpha",
+        "update_id": 900,
+        "requested_at": time.time(),
+    }))
+    monkeypatch.setattr(
+        "gateway.session_identity.transport_profile_of",
+        lambda _source: "beta",
+    )
+    runner, _adapter = make_restart_runner()
+    runner.request_restart = MagicMock(return_value=True)
+
+    await runner._handle_restart_command(_make_restart_event(update_id=100))
+
+    runner.request_restart.assert_called_once()

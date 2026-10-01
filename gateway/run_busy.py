@@ -1248,6 +1248,15 @@ class GatewayBusySessionMixin:
         ):
             return False
 
+        # Telegram update IDs are only ordered within one receiving bot. A runtime profile can
+        # host several bot credentials, so a marker from another transport must not consume beta's
+        # one-shot restart guard. Legacy markers without this field retain the old behavior.
+        marker_transport = data.get("transport_profile")
+        if marker_transport is not None:
+            from gateway.session_identity import transport_profile_of
+            if transport_profile_of(event.source) != marker_transport:
+                return False
+
         # A service-managed restart can outlast the 5-minute trust window; consume the boot
         # signal one-shot.
         if getattr(self, "_booted_from_restart", False):
