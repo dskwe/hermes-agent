@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -240,3 +241,33 @@ class TestWebSocketHostOriginGuard:
                 pass
 
         assert exc.value.code == 4403
+
+    def test_authenticated_remote_gateway_accepts_desktop_loopback_origin(self, monkeypatch):
+        from hermes_cli import web_server, web_server_chat
+
+        monkeypatch.setattr(web_server.app.state, "bound_host", "100.64.0.1", raising=False)
+        monkeypatch.setattr(web_server.app.state, "auth_required", True, raising=False)
+        ws = SimpleNamespace(
+            headers={
+                "host": "100.64.0.1:9119",
+                "origin": "http://127.0.0.1:47891",
+            }
+        )
+
+        assert web_server_chat._ws_host_origin_reason(ws) is None
+
+    def test_unauthenticated_remote_gateway_rejects_desktop_loopback_origin(self, monkeypatch):
+        from hermes_cli import web_server, web_server_chat
+
+        monkeypatch.setattr(web_server.app.state, "bound_host", "100.64.0.1", raising=False)
+        monkeypatch.setattr(web_server.app.state, "auth_required", False, raising=False)
+        ws = SimpleNamespace(
+            headers={
+                "host": "100.64.0.1:9119",
+                "origin": "http://127.0.0.1:47891",
+            }
+        )
+
+        reason = web_server_chat._ws_host_origin_reason(ws)
+        assert reason is not None
+        assert reason.startswith("origin_mismatch")
