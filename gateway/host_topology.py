@@ -61,6 +61,8 @@ def _from_host_record() -> Optional[HostGatewayTopology]:
     record = hr.read_record(hr.ROLE_GATEWAY)  # already drops stale/PID-reused records
     if record is None or not record.pid:
         return None
+    if record.multiplex is False:
+        return None
     # A record whose (pid, createTime) cannot be POSITIVELY matched is a candidate, never an owner
     # (``host_rendezvous`` contract): reporting an unprovable record as the live host gateway would
     # turn a leftover record into a permanent "running" lie on every surface. A record with no

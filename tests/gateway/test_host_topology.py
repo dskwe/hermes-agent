@@ -74,6 +74,16 @@ def test_record_without_createtime_is_never_the_host_gateway(host_gateway, monke
     assert host_topology.host_gateway_topology() is None
 
 
+def test_standalone_record_is_not_reported_as_the_host_gateway(host_gateway, monkeypatch):
+    from gateway import host_rendezvous as hr
+    from gateway import host_topology
+
+    hr.publish_record(hr.ROLE_GATEWAY, profiles=("solo",), multiplex=False)
+    monkeypatch.setattr("hermes_cli.gateway_multiplex_served.live_default_gateway_pid", lambda: None)
+
+    assert host_topology.host_gateway_topology() is None
+
+
 def test_topology_ignores_another_tenants_record_and_reads_the_launch_homes_state(tmp_path, monkeypatch):
     """#121352 reporting half: a record from ANOTHER Hermes root is not this tenant's host gateway
     (doctor / cron status / the dashboard ladder), and a NAMED-hosted multiplexer's platforms are read

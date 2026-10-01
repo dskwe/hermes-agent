@@ -5566,7 +5566,8 @@ def _refresh_host_gateway_record(runner) -> None:
             served = tuple(runner.served_profile_names())
         else:
             served = (profile_name_for_home(home),)
-        hr.publish_record(hr.ROLE_GATEWAY, profiles=served, home=str(home))
+        hr.publish_record(hr.ROLE_GATEWAY, profiles=served, home=str(home),
+                          multiplex=bool(getattr(runner.config, "multiplex_profiles", False)))
     except Exception:
         logger.debug("host gateway record refresh failed", exc_info=True)
 

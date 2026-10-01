@@ -91,6 +91,8 @@ class HostRecord:
     token_fingerprint: str
     profiles: tuple[str, ...]
     updated_at: str
+    #: Whether the owner multiplexes profiles. None for records written before this field.
+    multiplex: Optional[bool] = None
     #: HERMES_HOME the owner was launched from. The attach channel (``gateway.control_socket``) is
     #: keyed by home, so without it a client can only guess the default root — wrong as soon as a
     #: named profile launches the host process. Absent in records written before this field; added
@@ -110,6 +112,7 @@ class HostRecord:
             "tokenFingerprint": self.token_fingerprint,
             "profiles": list(self.profiles),
             "updatedAt": self.updated_at,
+            "multiplex": self.multiplex,
         }
 
     @classmethod
@@ -134,6 +137,7 @@ class HostRecord:
             token_fingerprint=str(payload.get("tokenFingerprint") or ""),
             profiles=tuple(str(p) for p in profiles if isinstance(p, str)) if isinstance(profiles, list) else (),
             updated_at=str(payload.get("updatedAt") or ""),
+            multiplex=payload.get("multiplex") if isinstance(payload.get("multiplex"), bool) else None,
             home=str(payload.get("home") or ""),
         )
 
@@ -439,6 +443,7 @@ def publish_record(
     profiles: Sequence[str] = (),
     token: Optional[str] = None,
     home: str = "",
+    multiplex: Optional[bool] = None,
 ) -> Optional[HostRecord]:
     """Publish this process as the host owner of ``role``. ``None`` when the write failed.
 
@@ -457,6 +462,7 @@ def publish_record(
         token_fingerprint=token_fingerprint(token or ""),
         profiles=tuple(str(p) for p in profiles),
         updated_at=datetime.now(timezone.utc).isoformat(),
+        multiplex=multiplex,
         home=str(home or ""),
     )
     try:
