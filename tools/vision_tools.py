@@ -535,13 +535,64 @@ class _PreparedImage(NamedTuple):
     crop_offset: dict
 
 
+def _prepare_image_sync(
+    data: bytes,
+    detected_mime: str,
+    temp_dir: Path,
+    region: Optional[list],
+    validate_decode: bool,
+    cancelled: "threading.Event",
+) -> _PreparedImage:
+    """Prepare an image in one worker transaction.
+
+    Cancellation can interrupt the awaiting coroutine while this worker is still
+    writing or converting.  The worker owns every path it creates and therefore
+    performs cleanup itself when cancellation is observed, even if the event loop
+    has already closed.
+    """
+    import threading
+    temp_paths: list[Path] = []
+    path = temp_dir / f"temp_image_{uuid.uuid4()}.img"
+    temp_paths.append(path)
+    try:
+        path.write_bytes(data)
+        mime, size_bytes, crop_offset = detected_mime, len(data), {}
+        normalized_path, mime, norm_err = _normalize_to_supported_image(path, mime)
+        if norm_err or normalized_path is None:
+            raise _ImagePrepError(norm_err or "Image normalization failed.")
+        if normalized_path != path:
+            temp_paths.append(normalized_path)
+            path.unlink(missing_ok=True)
+            path = normalized_path
+            size_bytes = path.stat().st_size
+        if validate_decode:
+            decode_error = _validate_raster_image_decodable(
+                path, _VISION_MAX_VALIDATED_FRAME_COUNT, _VISION_MAX_VALIDATED_AGGREGATE_PIXELS)
+            if decode_error:
+                raise _ImagePrepError(decode_error)
+        if region is not None:
+            cropped_path, cropped_mime, crop_err = _crop_image_region(path, region, offset_out=crop_offset)
+            if crop_err or cropped_path is None:
+                raise _ImagePrepError(crop_err or "Region crop failed.")
+            temp_paths.append(cropped_path)
+            path.unlink(missing_ok=True)
+            path, mime, size_bytes = cropped_path, cropped_mime, cropped_path.stat().st_size
+        if cancelled.is_set():
+            raise asyncio.CancelledError
+        # The returned path is now owned by the caller.
+        temp_paths.remove(path)
+        return _PreparedImage(path, mime, size_bytes, crop_offset)
+    finally:
+        if cancelled.is_set():
+            for owned in temp_paths:
+                owned.unlink(missing_ok=True)
+
+
 async def _prepare_image(
     image_url: str, task_id: Optional[str], region: Optional[list], *, validate_decode: bool,
 ) -> _PreparedImage:
-    """Resolve → materialize → normalize → (validate) → (crop). Raises ``_ImagePrepError``.
-    Unsupported formats (SVG, BMP) become PNG BEFORE encoding — an unsupported media_type baked
-    into immutable history would 400 on every resume. The crop runs BEFORE any downscale so the
-    region keeps the full resolution budget. On error no temp file is left."""
+    """Resolve and prepare an image through one cancellation-safe worker transaction."""
+    import threading
     from tools.image_source import ImageResolutionError, ResolveContext, resolve_image_source
     try:
         resolved = await resolve_image_source(image_url, ResolveContext(task_id=task_id))
@@ -549,34 +600,22 @@ async def _prepare_image(
         raise _ImagePrepError(str(exc)) from exc
     temp_dir = get_hermes_dir("cache/vision", "temp_vision_images")
     temp_dir.mkdir(parents=True, exist_ok=True)
-    path = temp_dir / f"temp_image_{uuid.uuid4()}.img"
-    await asyncio.to_thread(path.write_bytes, resolved.data)
-    mime, size_bytes, crop_offset = resolved.mime, len(resolved.data), {}
+    cancelled = threading.Event()
+    worker = asyncio.create_task(asyncio.to_thread(
+        _prepare_image_sync, resolved.data, resolved.mime, temp_dir, region, validate_decode, cancelled))
     try:
-        normalized_path, mime, norm_err = await asyncio.to_thread(_normalize_to_supported_image, path, mime)
-        if norm_err or normalized_path is None:
-            raise _ImagePrepError(norm_err or "Image normalization failed.")
-        if normalized_path != path:
-            _unlink_quietly(path)
-            path = normalized_path
-            size_bytes = path.stat().st_size
-        if validate_decode:
-            decode_error = await _run_encode_on_cpu_executor(
-                _validate_raster_image_decodable, path,
-                _VISION_MAX_VALIDATED_FRAME_COUNT, _VISION_MAX_VALIDATED_AGGREGATE_PIXELS)
-            if decode_error:
-                raise _ImagePrepError(decode_error)
-        if region is not None:
-            cropped_path, cropped_mime, crop_err = await asyncio.to_thread(
-                _crop_image_region, path, region, offset_out=crop_offset)
-            if crop_err or cropped_path is None:
-                raise _ImagePrepError(crop_err or "Region crop failed.")
-            _unlink_quietly(path)
-            path, mime, size_bytes = cropped_path, cropped_mime, cropped_path.stat().st_size
-    except BaseException:
-        _unlink_quietly(path)
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancelled.set()
+        # Let the worker own the final unlink. This callback does not require the
+        # caller's loop to remain alive after the worker has started.
+        def _worker_finished(done):
+            try:
+                done.result()
+            except BaseException:
+                pass
+        worker.add_done_callback(_worker_finished)
         raise
-    return _PreparedImage(path, mime, size_bytes, crop_offset)
 
 
 def _too_large_message(image_data_url: str) -> str:
