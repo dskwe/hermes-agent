@@ -3234,12 +3234,25 @@ def _prepare_service_launcher(*, system: bool = False, run_as_user: str | None =
         reset_hermes_home_override(token)
 
 
+def _service_project_root() -> Path:
+    """Return the durable install root, not a package-manager workspace copy."""
+    root = PROJECT_ROOT
+    if "/installs/" not in str(root):
+        return root
+    try:
+        from hermes_constants import get_default_hermes_root
+        candidate = get_default_hermes_root() / "hermes-agent"
+    except Exception:
+        return root
+    return candidate if (candidate / "pyproject.toml").is_file() else root
+
+
 def generate_systemd_unit(system: bool = False, run_as_user: str | None = None) -> str:
     from hermes_cli._launchers import installation_command
 
     python_path = get_python_path()
     working_dir = _stable_service_working_dir()
-    project_root = PROJECT_ROOT
+    project_root = _service_project_root()
 
     path_entries = _build_service_path_dirs()
     if not system:
