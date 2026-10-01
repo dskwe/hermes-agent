@@ -4,6 +4,27 @@ from tools.fuzzy_match import IDENTICAL_STRINGS_ERROR, fuzzy_find_and_replace
 
 
 class TestExactMatch:
+    def test_read_file_line_number_gutters_are_rejected(self):
+        content = "[server]\nport = 8080\nhost = localhost\n"
+        new, count, strategy, err = fuzzy_find_and_replace(
+            content, "2|port = 8080", "2|port = 9090"
+        )
+        assert new == content
+        assert count == 0
+        assert strategy is None
+        assert "read_file display text" in err
+
+    def test_multiline_read_file_line_number_gutters_are_rejected(self):
+        content = "[server]\nport = 8080\nhost = localhost"
+        new, count, _, err = fuzzy_find_and_replace(
+            content,
+            "1|[server]\n2|port = 8080\n3|host = localhost",
+            "1|[server]\n2|port = 9090\n3|host = example.com",
+        )
+        assert new == content
+        assert count == 0
+        assert "Strip the line-number prefixes" in err
+
     def test_single_replacement(self):
         content = "hello world"
         new, count, _, err = fuzzy_find_and_replace(content, "hello", "hi")

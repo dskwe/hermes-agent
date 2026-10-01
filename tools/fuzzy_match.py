@@ -304,6 +304,30 @@ SIMILARITY_STRATEGIES = frozenset({"block_anchor", "context_aware"})
 
 # ── Orchestrator ─────────────────────────────────────────────────────────
 
+_READ_FILE_GUTTER_RE = re.compile(r"^\s*\d+\|", re.MULTILINE)
+
+
+def _read_file_gutter_error(content: str, old_string: str) -> Optional[str]:
+    """Reject read_file display gutters before approximate matching can copy them.
+
+    ``read_file`` renders lines as ``N|text``.  Those prefixes are not file
+    bytes, but similarity strategies can otherwise match a gutter-prefixed
+    ``old_string`` against the real text and write the gutter from
+    ``new_string`` into the file.  A single line is enough to identify this
+    mistake, so do not use the multiline-only write guard here.
+    """
+    if old_string in content:
+        return None
+    lines = [line for line in old_string.splitlines() if line.strip()]
+    if lines and all(_READ_FILE_GUTTER_RE.match(line) for line in lines):
+        return (
+            "Refusing to patch read_file display text: old_string contains "
+            "LINE_NUM|CONTENT prefixes that are not part of the file. Strip "
+            "the line-number prefixes from old_string and new_string, then "
+            "retry the patch."
+        )
+    return None
+
 def is_already_applied(content: str, old_string: str, new_string: str) -> bool:
     """True when the edit is already present (re-sent edit -> success-shaped no-op).
     Conservative: new_string non-trivial (>= 8 chars) and present EXACTLY; old_string gone."""
@@ -360,6 +384,10 @@ def fuzzy_find_and_replace(content: str, old_string: str, new_string: str,
             "first if unsure). Do not re-send this call unchanged.")
     if old_string == new_string:
         return content, 0, None, IDENTICAL_STRINGS_ERROR
+
+    gutter_err = _read_file_gutter_error(content, old_string)
+    if gutter_err:
+        return content, 0, None, gutter_err
 
     for strategy_name, strategy_fn in STRATEGIES:
         matches = strategy_fn(content, old_string)
