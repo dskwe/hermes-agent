@@ -517,7 +517,9 @@ def _read_process_cmdline(pid: int) -> Optional[str]:
         import psutil  # type: ignore
         cmdline_parts = psutil.Process(pid).cmdline()
         if cmdline_parts:
-            return " ".join(cmdline_parts)
+            # Windows process argv must be reconstructed with quoting preserved; a plain space-join
+            # splits an interpreter path such as ``C:\\Hermes Agent\\python.exe`` on the next read.
+            return subprocess.list2cmdline(cmdline_parts) if _IS_WINDOWS else " ".join(cmdline_parts)
     if not _IS_WINDOWS:
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             result = subprocess.run(
