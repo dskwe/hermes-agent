@@ -11,7 +11,19 @@ import { expect, it, vi } from 'vitest'
 import * as updaterProcess from '../updater-process'
 
 import { type CheckoutStrategyDeps, createCheckoutStrategy } from './checkout'
-import { readSourceUpdate, type SourceUpdate } from './checkout-source'
+import { readSourceUpdate, sourceUpdateEnvironment, type SourceUpdate } from './checkout-source'
+
+it('scrubs launch-scoped ignore-existing from the update handoff environment', () => {
+  vi.stubEnv('HERMES_DESKTOP_IGNORE_EXISTING', '1')
+  vi.stubEnv('HERMES_RUNTIME_DIR', '/tmp/hermes-runtime')
+
+  const env = sourceUpdateEnvironment('/updated/install', '/home/user/.hermes')
+
+  expect(env.HERMES_DESKTOP_IGNORE_EXISTING).toBeUndefined()
+  expect(env.HERMES_RUNTIME_DIR).toBeUndefined()
+  expect(env.HERMES_INSTALL_ROOT).toBe('/updated/install')
+  expect(env.HERMES_HOME).toBe('/home/user/.hermes')
+})
 
 const execute: typeof execFile.__promisify__ = promisify(execFile)
 const repository: string = path.resolve(import.meta.dirname, '../../../..')

@@ -34,6 +34,9 @@ export function sourceUpdateEnvironment(updateRoot: string, hermesHome: string):
   }
 
   delete env.HERMES_RUNTIME_DIR
+  // This flag controls only the current launch. Do not carry it into the
+  // post-update relaunch, which must adopt the freshly updated installation.
+  delete env.HERMES_DESKTOP_IGNORE_EXISTING
 
   return env
 }
