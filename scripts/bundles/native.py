@@ -231,9 +231,15 @@ def _prepare_native(*, out: Path, ref: str, source: Path, cache: Path,
 
     # Inventory the staged interpreter before publishing the bundle contract.
     from pm.features import installed_extras, write_features
+    from pm.packages import Venv
 
     features = installed_extras(repo_dir, venv_dir, python_exe=python_bin)
     write_features(features, out)
+    Facts(out / "tools" / "facts.json").record_state(
+        "venv",
+        Venv(repo_dir).expected_stamp(features, plugin_dirs=[]),
+        features,
+    )
     print(f"✓ enabled-features.json ({len(features)} extras recorded)")
 
     # Ship the full uv cache (build-only sdist sources and wheel ZIPs are

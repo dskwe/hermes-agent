@@ -170,6 +170,11 @@ def test_bundle_stages_git_tree_and_runs_native_children_before_manifest(tmp_pat
     monkeypatch.setenv("HERMES_RUNTIME_DIR", str(user_store))
     monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "cache"))
     prepared = native.prepare_native(out=output, ref="HEAD", source=repo, cache=tmp_path / "cache", tools=canonical, env=env)
+    venv_fact = Facts(output / "tools" / "facts.json").get("venv")
+    assert venv_fact is not None
+    assert venv_fact["stamp"]
+    assert venv_fact["extras"] == ["payloadtest"]
+    assert "environment" not in venv_fact
     assert {name: tree_digest(canonical / facts.get(name)["entry"]) for name in selected} == canonical_before
     assert (canonical / "facts.json").read_bytes() == canonical_facts
     assert not target_python.samefile(source_python)
