@@ -68,6 +68,7 @@ _MODEL_CACHE_TTL = 3600
 _endpoint_model_metadata_cache: Dict[Tuple[str, str], Dict[str, Dict[str, Any]]] = {}
 _endpoint_model_metadata_cache_time: Dict[Tuple[str, str], float] = {}
 _ENDPOINT_MODEL_CACHE_TTL = 300
+_ENDPOINT_MODEL_CACHE_MAX_ENTRIES = 128
 # Server-type verdicts (server_type, monotonic_ts): positive ones live an hour so a
 # server swap on the same port is re-detected; None gets the short TTL so a
 # transient failure recovers in minutes without re-running the waterfall each turn.
@@ -1009,9 +1010,32 @@ def _endpoint_memo_key(normalized: str, api_key: object) -> Tuple[str, str]:
     return normalized, (fingerprint_secret_value(api_key) or "") if isinstance(api_key, str) else ""
 
 
+def _prune_endpoint_model_metadata_cache(now: Optional[float] = None) -> None:
+    """Remove expired entries and bound retained endpoint/credential catalogs."""
+    now = time.time() if now is None else now
+    keys = set(_endpoint_model_metadata_cache) | set(_endpoint_model_metadata_cache_time)
+    fresh_keys = {
+        key
+        for key in keys
+        if key in _endpoint_model_metadata_cache
+        and now - _endpoint_model_metadata_cache_time.get(key, 0) < _ENDPOINT_MODEL_CACHE_TTL
+    }
+    for key in keys - fresh_keys:
+        _endpoint_model_metadata_cache.pop(key, None)
+        _endpoint_model_metadata_cache_time.pop(key, None)
+
+    if len(fresh_keys) > _ENDPOINT_MODEL_CACHE_MAX_ENTRIES:
+        for key in sorted(fresh_keys, key=lambda item: _endpoint_model_metadata_cache_time.get(item, 0))[
+            : len(fresh_keys) - _ENDPOINT_MODEL_CACHE_MAX_ENTRIES
+        ]:
+            _endpoint_model_metadata_cache.pop(key, None)
+            _endpoint_model_metadata_cache_time.pop(key, None)
+
+
 def _remember_endpoint_models(memo_key: Tuple[str, str], cache: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     _endpoint_model_metadata_cache[memo_key] = cache
     _endpoint_model_metadata_cache_time[memo_key] = time.time()
+    _prune_endpoint_model_metadata_cache()
     return cache
 
 
@@ -1032,6 +1056,7 @@ def fetch_endpoint_model_metadata(base_url: str, api_key: str = "", force_refres
     local = is_local_endpoint(normalized)
     memo_key = _endpoint_memo_key(normalized, api_key)
     if not force_refresh:
+        _prune_endpoint_model_metadata_cache()
         cached = _endpoint_model_metadata_cache.get(memo_key)
         if cached is not None and (time.time() - _endpoint_model_metadata_cache_time.get(memo_key, 0)) < _ENDPOINT_MODEL_CACHE_TTL:
             return cached

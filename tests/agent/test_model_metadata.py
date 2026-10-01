@@ -826,6 +826,42 @@ class TestFetchEndpointModelMetadata:
         mock_stream.assert_called_once()
         ctx.__exit__.assert_called_once()
 
+    def test_expired_entries_are_pruned_before_lookup(self):
+        import agent.model_metadata as mm
+
+        stale_key = ("https://stale.example/v1", "stale")
+        live_key = ("https://live.example/v1", "live")
+        mm._endpoint_model_metadata_cache[stale_key] = {"stale": {}}
+        mm._endpoint_model_metadata_cache_time[stale_key] = 0
+        mm._endpoint_model_metadata_cache[live_key] = {"live": {}}
+        mm._endpoint_model_metadata_cache_time[live_key] = time.time()
+
+        with patch("agent.model_metadata.is_local_endpoint", return_value=False), patch(
+            "agent.model_metadata._endpoint_memo_key", return_value=live_key
+        ):
+            assert mm.fetch_endpoint_model_metadata("https://live.example/v1") == {"live": {}}
+
+        assert stale_key not in mm._endpoint_model_metadata_cache
+        assert stale_key not in mm._endpoint_model_metadata_cache_time
+        assert live_key in mm._endpoint_model_metadata_cache
+
+    def test_endpoint_cache_is_bounded_by_oldest_entry(self):
+        import agent.model_metadata as mm
+
+        for index in range(mm._ENDPOINT_MODEL_CACHE_MAX_ENTRIES):
+            key = (f"https://endpoint-{index}.example/v1", str(index))
+            mm._endpoint_model_metadata_cache[key] = {str(index): {}}
+            mm._endpoint_model_metadata_cache_time[key] = float(index + 1)
+
+        newest_key = ("https://new.example/v1", "new")
+        with patch("agent.model_metadata.time.time", return_value=129):
+            mm._remember_endpoint_models(newest_key, {"new": {}})
+
+        assert len(mm._endpoint_model_metadata_cache) == mm._ENDPOINT_MODEL_CACHE_MAX_ENTRIES
+        assert len(mm._endpoint_model_metadata_cache_time) == mm._ENDPOINT_MODEL_CACHE_MAX_ENTRIES
+        assert ("https://endpoint-0.example/v1", "0") not in mm._endpoint_model_metadata_cache
+        assert newest_key in mm._endpoint_model_metadata_cache
+
     def test_not_found_still_tries_alternate_candidate(self):
         import agent.model_metadata as mm
 
