@@ -1447,7 +1447,11 @@ class SlackAdapter(BasePlatformAdapter):
             if template:
                 return template.format(file_label=file_label)
         message = str(exc)
-        if "Slack returned HTML instead of media" in message or "non-image data" in message:
+        if "non-image data" in message:
+            return (
+                f"Slack attachment could not be processed for {file_label}: "
+                "the downloaded file is not a supported raster image format.")
+        if "Slack returned HTML instead of media" in message:
             return (
                 f"Slack attachment access failed for {file_label}: Slack returned an HTML/login or non-media response. "
                 "This usually means a scope, auth, or file-permission problem.")
@@ -4780,6 +4784,8 @@ class SlackAdapter(BasePlatformAdapter):
     @staticmethod
     def _slack_file_kind(f: Dict[str, Any], mimetype: str) -> str:
         """image / audio / voice clip / video / document, from mimetype (+ voice-clip heuristics)."""
+        if mimetype.split(";", 1)[0].lower() == "image/svg+xml":
+            return "document"
         for prefix in ("image", "audio"):
             if mimetype.startswith(prefix + "/"):
                 return prefix

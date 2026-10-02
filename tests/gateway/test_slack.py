@@ -1545,6 +1545,23 @@ class TestIncomingDocumentHandling:
             "attachments": attachments or [],
         }
 
+    def test_svg_attachment_is_treated_as_document(self, adapter):
+        """SVG is XML and must not enter the raster-image cache path."""
+        file_obj = {"name": "diagram.svg", "mimetype": "image/svg+xml"}
+
+        assert adapter._slack_file_kind(file_obj, "image/svg+xml") == "document"
+
+    def test_non_image_download_failure_is_not_reported_as_auth_failure(self, adapter):
+        detail = adapter._describe_slack_download_failure(
+            ValueError("Refusing to cache non-image data as .jpg"),
+            file_obj={"name": "diagram.svg"},
+        )
+
+        assert detail == (
+            "Slack attachment could not be processed for diagram.svg: "
+            "the downloaded file is not a supported raster image format."
+        )
+
     @pytest.mark.asyncio
     async def test_pdf_document_cached(self, adapter):
         """A PDF attachment should be downloaded, cached, and set as DOCUMENT type."""
