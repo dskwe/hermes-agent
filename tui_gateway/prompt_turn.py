@@ -1182,7 +1182,6 @@ def _run_prompt_submit(
         except Exception as e:
             _recover_turn_exception(sid, session, st, e)
         finally:
-            _finish_turn(sid, session, st)
             _current_runtime_session_record.reset(runtime_session_token)
             reset_transport(transport_token)
             # A stale interim closure must not fire during a later turn.
@@ -1215,6 +1214,10 @@ def _run_prompt_submit(
                     session.pop("_hosted_room_task", None)
             session.pop("_auto_continue_scheduled", None)
             _emit_settled_session_info(sid, session, st.agent)
+            # Post-turn cleanup is best effort. The session release and closing
+            # bookend above must not be gated by memory trimming, TTS, or another
+            # cleanup step that can block or fail.
+            _finish_turn(sid, session, st)
         return st.result, goal_followup
     def run():
         from agent.notification_presentation import notification_turn
