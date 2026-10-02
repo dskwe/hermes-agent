@@ -166,14 +166,23 @@ function domSections(open: Extract<OpenContextMenu, { kind: 'dom' }>, t: Transla
       }
 
       if (editable) {
-        const range = document.createRange()
+        // Rich editors restore their caret from their focus handler. Apply the
+        // range after that focus work has painted, otherwise the caret restore
+        // immediately collapses Select all again.
+        requestAnimationFrame(() => {
+          if (!editable.isConnected) {
+            return
+          }
 
-        range.selectNodeContents(editable)
+          const range = document.createRange()
 
-        const selection = window.getSelection()
+          range.selectNodeContents(editable)
 
-        selection?.removeAllRanges()
-        selection?.addRange(range)
+          const selection = window.getSelection()
+
+          selection?.removeAllRanges()
+          selection?.addRange(range)
+        })
       }
     })
   }
