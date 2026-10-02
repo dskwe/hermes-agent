@@ -1447,10 +1447,15 @@ class SlackAdapter(BasePlatformAdapter):
             if template:
                 return template.format(file_label=file_label)
         message = str(exc)
-        if "Slack returned HTML instead of media" in message or "non-image data" in message:
+        if "non-image data" in message:
             return (
-                f"Slack attachment access failed for {file_label}: Slack returned an HTML/login or non-media response. "
-                "This usually means a scope, auth, or file-permission problem.")
+                f"Slack attachment could not be processed for {file_label}: Slack returned data that is not a supported raster image."
+            )
+        if "Slack returned HTML instead of media" in message:
+            return (
+                f"Slack attachment access failed for {file_label}: Slack returned an HTML/login response. "
+                "This usually means a scope, auth, or file-permission problem."
+            )
         return None
 
     # Slash-command ephemeral helpers. response_url is valid 30 min; the much shorter TTL avoids
@@ -4780,6 +4785,8 @@ class SlackAdapter(BasePlatformAdapter):
     @staticmethod
     def _slack_file_kind(f: Dict[str, Any], mimetype: str) -> str:
         """image / audio / voice clip / video / document, from mimetype (+ voice-clip heuristics)."""
+        if mimetype.lower().split(";", 1)[0].strip() == "image/svg+xml":
+            return "document"
         for prefix in ("image", "audio"):
             if mimetype.startswith(prefix + "/"):
                 return prefix
