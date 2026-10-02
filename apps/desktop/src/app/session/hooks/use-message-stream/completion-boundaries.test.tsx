@@ -314,6 +314,32 @@ it('settles an equal no-delta completion onto the sealed pre-redirect reply', as
   h.dispose()
 })
 
+it('settles a live bubble after its stream identity was cleared', async () => {
+  const h = mount()
+  await h.submit()
+  await h.send('message.start')
+  await h.send('message.delta', { text: 'Answer' })
+  h.update(state => ({
+    ...state,
+    streamId: null,
+    messages: state.messages.map(message =>
+      message.role === 'assistant'
+        ? { ...message, pending: false, interim: false, durableComplete: false }
+        : message
+    )
+  }))
+
+  await h.send('message.complete', { text: 'Answer' })
+
+  expect(timeline(h.state().messages)).toEqual([
+    ['user', 'Give the answer.'],
+    ['assistant', 'Answer']
+  ])
+  expect(h.state().messages.filter(message => message.role === 'assistant')).toHaveLength(1)
+  expect(h.state().messages.at(-1)?.interim).toBeFalsy()
+  h.dispose()
+})
+
 it.each(['fallback', 'stream', 'tool-interim'] as const)(
   'retires recovered metadata when completion settles the %s row',
   async path => {
