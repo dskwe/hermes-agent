@@ -104,3 +104,22 @@ def test_accepted_and_finished_records_on_success(turn_env, caplog):
 
     fin = finished[0].getMessage()
     assert "hunter2" not in fin
+
+
+def test_session_released_before_post_turn_finalization(turn_env, monkeypatch):
+    agent = types.SimpleNamespace(
+        session_id="agent-sid-1",
+        run_conversation=lambda *a, **k: {"final_response": "done"},
+        clear_interrupt=lambda: None,
+    )
+    session = _session(agent=agent, running=True)
+    observed = {}
+
+    def observe_finalization(sid, current_session, state):
+        observed["running"] = current_session["running"]
+
+    monkeypatch.setattr(server, "_finish_turn", observe_finalization)
+    server._run_prompt_submit("rid", "ui-sid", session, "hello")
+
+    assert observed["running"] is False
+    assert session["running"] is False
