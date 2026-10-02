@@ -5305,25 +5305,26 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         reason = f"Requested by {display_name} via /thread"
         starter_message = (message or "").strip()
         try:
-            thread = await parent_channel.create_thread(
+            seed_content = starter_message or t("platform.discord.thread.seed_message", name=name)
+            seed_msg = await parent_channel.send(seed_content)
+            thread = await seed_msg.create_thread(
                 name=name, auto_archive_duration=auto_archive_duration, reason=reason,
             )
-            if starter_message:
-                await thread.send(starter_message)
             return self._thread_created(thread, name)
-        except Exception as direct_error:
+        except Exception as seed_error:
             try:
-                seed_content = starter_message or t("platform.discord.thread.seed_message", name=name)
-                seed_msg = await parent_channel.send(seed_content)
-                thread = await seed_msg.create_thread(
-                    name=name, auto_archive_duration=auto_archive_duration, reason=reason,
+                thread = await parent_channel.create_thread(
+                    name=name, auto_archive_duration=auto_archive_duration,
+                    type=discord.ChannelType.public_thread, reason=reason,
                 )
+                if starter_message:
+                    await thread.send(starter_message)
                 return self._thread_created(thread, name)
-            except Exception as fallback_error:
+            except Exception as direct_error:
                 return {
                     "error": t(
                         "platform.discord.command.thread.error_both_failed",
-                        direct_error=str(direct_error), fallback_error=str(fallback_error)),
+                        direct_error=str(direct_error), fallback_error=str(seed_error)),
                 }
 
     @staticmethod
@@ -5471,16 +5472,6 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
         thread_name = (name or "handoff").strip()[:80] or "handoff"
         reason = "Hermes session handoff"
         try:
-            create = getattr(parent, "create_thread", None)
-            if create is not None:
-                thread = await create(name=thread_name, auto_archive_duration=1440, reason=reason)
-                return str(thread.id)
-        except Exception as direct_error:
-            logger.debug(
-                "[%s] Handoff thread: direct create failed (%s); trying seed-message fallback",
-                self.name, direct_error,
-            )
-        try:
             send = getattr(parent, "send", None)
             if send is None:
                 return None
@@ -5489,10 +5480,24 @@ class DiscordAdapter(DiscordMediaMixin, BasePlatformAdapter):
                 name=thread_name, auto_archive_duration=1440, reason=reason,
             )
             return str(thread.id)
-        except Exception as fallback_error:
+        except Exception as seed_error:
+            logger.debug(
+                "[%s] Handoff thread: seed-message create failed (%s); trying direct public thread",
+                self.name, seed_error,
+            )
+        try:
+            create = getattr(parent, "create_thread", None)
+            if create is None:
+                return None
+            thread = await create(
+                name=thread_name, auto_archive_duration=1440,
+                type=discord.ChannelType.public_thread, reason=reason,
+            )
+            return str(thread.id)
+        except Exception as direct_error:
             logger.warning(
                 "[%s] Handoff thread: both create paths failed for parent %s: %s",
-                self.name, parent_chat_id, fallback_error,
+                self.name, parent_chat_id, direct_error,
             )
             return None
 
