@@ -2161,6 +2161,8 @@ class GatewayTurnMixin:
         if not isinstance(prepared, self._PreparedTurn):
             return prepared
         history, message_text = prepared.history, prepared.message_text
+        from agent.turn_author import parse_turn_author
+        turn_author = parse_turn_author((event.metadata or {}).get("hermes_turn_author"))
 
         try:
             hook_ctx = {
@@ -2207,6 +2209,7 @@ class GatewayTurnMixin:
                     "gateway_input_owner": prepared.persistence_owner,
                     **reply_expected_metadata(event.reply_expected), **diagnostic_metadata(event)},
                 message_type=event.message_type,
+                turn_author=turn_author,
                 scheduled_heartbeat=bool(getattr(event, "_heartbeat_session_id", None)),
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
@@ -2806,7 +2809,6 @@ class GatewayTurnMixin:
         if session_id:
             headers["X-Hermes-Session-Id"] = session_id
         body = {"model": "hermes-agent", "messages": api_messages, "stream": True}
-
         _thread_metadata: Optional[Dict[str, Any]] = self._thread_metadata_for_source(source, event_message_id)
         _stream_consumer = (
             None if scheduled_heartbeat
@@ -4235,6 +4237,7 @@ class GatewayTurnMixin:
         reply_expected: Optional[bool] = None,
         scheduled_heartbeat: bool = False,
         title_user_message: Optional[str] = None,
+        turn_author: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run the agent; returns the full run_conversation result dict.
 
@@ -4274,6 +4277,7 @@ class GatewayTurnMixin:
             reply_expected=reply_expected,
             persist_user_display_metadata=persist_user_display_metadata,
             scheduled_heartbeat=scheduled_heartbeat,
+            turn_author=turn_author,
         )
         _status_thread_metadata = self._run_agent_bind_turn_wiring(
             turn_ctx, turn_runner, source, event_message_id, disp._native_slack_task_cards,

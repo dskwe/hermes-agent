@@ -1937,6 +1937,7 @@ class GatewayInboundMixin:
             allow_gateway_control=False,
             metadata={
                 "hermes_plugin_id": plugin_id, "hermes_plugin_injection": True,
+                "hermes_turn_author": {"id": plugin_id, "name": plugin_id, "is_bot": True},
                 "gateway_session_key": session_key, "gateway_session_id": entry.session_id,
                 "gateway_session_strict": True,
             },

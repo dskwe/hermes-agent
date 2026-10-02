@@ -176,6 +176,7 @@ async def test_dispatch_uses_stored_origin_and_adapter_message_path():
     assert event.metadata == {
         "hermes_plugin_id": "notify-plugin",
         "hermes_plugin_injection": True,
+        "hermes_turn_author": {"id": "notify-plugin", "name": "notify-plugin", "is_bot": True},
         "gateway_session_key": entry.session_key,
         "gateway_session_id": entry.session_id,
         "gateway_session_strict": True,
