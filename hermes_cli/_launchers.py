@@ -100,9 +100,17 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
+def _is_scratch_runtime(path: Path) -> bool:
+    """Reject disposable test runtimes before their interpreter is published."""
+    parts = {part.casefold() for part in path.resolve().parts}
+    return "scratch" in parts or any(part.startswith("hermes-e2e-") for part in path.resolve().parts)
+
+
 def resolve_store_python(repo_root: Path) -> Path | None:
     """Read PM's committed Python tool, without adopting unrecorded bytes."""
     runtime = store_root(repo_root)
+    if _is_scratch_runtime(runtime):
+        return None
     rel = "python.exe" if _is_windows() else "bin/python3"
 
     facts = runtime / "facts.json"

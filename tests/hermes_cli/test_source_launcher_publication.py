@@ -223,6 +223,20 @@ def test_posix_materializer_publishes_only_executable_shell_launchers(tmp_path, 
     assert launcher.stat().st_mtime_ns == before
 
 
+def test_materializer_refuses_disposable_scratch_runtime(tmp_path, monkeypatch):
+    repo, home, _interpreter = fixture_tree(tmp_path, monkeypatch)
+    scratch = home / "cache" / "scratch" / "hermes-e2e-media-overlap" / "tools"
+    scratch.mkdir(parents=True)
+    (scratch / "facts.json").write_text(json.dumps({"packages": {"python": {
+        "entry": "python"
+    }}}), encoding="utf-8")
+    monkeypatch.setenv("HERMES_RUNTIME_DIR", str(scratch))
+    out = tmp_path / "bin"
+    assert _launchers.resolve_store_python(repo) is None
+    assert _launchers.ensure_install_launchers(repo, out) == []
+    assert not out.exists() or not list(out.iterdir())
+
+
 def test_materializer_cli_refuses_missing_store_without_publishing(tmp_path, monkeypatch):
     repo, home, _interpreter = fixture_tree(tmp_path, monkeypatch)
     (home / "tools" / "facts.json").unlink()
