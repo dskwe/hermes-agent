@@ -22,10 +22,12 @@ export function bindLayoutSides() {
     return sessions >= 0 && main >= 0 ? sessions > main : null
   }
 
+  let applyingFlip = false
+
   $layoutTree.subscribe(() => {
     const flipped = sessionsOnRight()
 
-    if (flipped !== null && flipped !== $panesFlipped.get()) {
+    if (!applyingFlip && flipped !== null && flipped !== $panesFlipped.get()) {
       $panesFlipped.set(flipped)
     }
   })
@@ -35,7 +37,12 @@ export function bindLayoutSides() {
 
     // Restoration replaces the tree; a transient mismatch is not a flip gesture.
     if (!modeLayout.restoring && current !== null && current !== flipped) {
-      mirrorLayoutTree()
+      applyingFlip = true
+      try {
+        mirrorLayoutTree()
+      } finally {
+        applyingFlip = false
+      }
     }
   })
 
