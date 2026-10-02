@@ -197,7 +197,8 @@ class SessionMaintenanceMixin:
 
     @staticmethod
     def _prune_filter_where(*, archived: Optional[bool] = None, include_pinned: bool = False,
-                            lineage_tips_only: bool = False, **filters) -> Tuple[str, list]:
+                            lineage_tips_only: bool = False, include_open: bool = False,
+                            **filters) -> Tuple[str, list]:
         """Shared WHERE clause for bulk prune/archive selection (alias ``s``): ``_PRUNE_FILTERS``
         AND together, only ended sessions are ever candidates, ``archived`` is tri-state
         (None = both), ``*_like`` are case-insensitive substrings, the rest exact.
@@ -208,7 +209,7 @@ class SessionMaintenanceMixin:
         if unknown:
             raise TypeError("SessionMaintenanceMixin._prune_filter_where() got an unexpected "
                             f"keyword argument {sorted(unknown)[0]!r}")
-        clauses = ["s.ended_at IS NOT NULL"]
+        clauses = [] if include_open else ["s.ended_at IS NOT NULL"]
         if lineage_tips_only:
             clauses.append("COALESCE(s.end_reason, '') <> 'compression'")
         params: list = []
@@ -225,7 +226,8 @@ class SessionMaintenanceMixin:
             clauses.append("COALESCE(s.pinned, 0) = 0")
         return " AND ".join(clauses), params
 
-    def _prune_where(self, older_than_days, source, filters, *, whole_lineages: bool = False) -> Tuple[str, list]:
+    def _prune_where(self, older_than_days, source, filters, *, whole_lineages: bool = False,
+                     include_open: bool = False) -> Tuple[str, list]:
         """Translate the legacy age window into the shared activity filter, then build WHERE.
         ``whole_lineages`` (prune) keeps a compression ancestor while any continuation after it
         is unmatched."""
@@ -236,7 +238,7 @@ class SessionMaintenanceMixin:
                     f"older_than_days must be >= 0, got {older_than_days!r}: a negative "
                     "retention builds a future cutoff that matches every ended session.")
             filters["last_active_before"] = time.time() - (older_than_days * 86400)
-        where, params = self._prune_filter_where(source=source, **filters)
+        where, params = self._prune_filter_where(source=source, include_open=include_open, **filters)
         if not whole_lineages:
             return where, params
         # A compressed-away segment ages with its conversation, not on its own: while any later
@@ -244,10 +246,12 @@ class SessionMaintenanceMixin:
         return f"{where} AND s.id NOT IN ({_continued_ancestors_sql(where)})", [*params, *params]
 
     def list_prune_candidates(self, older_than_days: Optional[float] = None, source: str = None, *,
-                              whole_lineages: bool = False, **filters) -> List[Dict[str, Any]]:
+                              whole_lineages: bool = False, include_open: bool = False,
+                              **filters) -> List[Dict[str, Any]]:
         """Dry-run: sessions a matching prune/archive would touch, oldest first (``older_than_days``
         = inactivity threshold: freshest of ``last_activity_at`` / latest message / ``started_at``)."""
-        where, params = self._prune_where(older_than_days, source, filters, whole_lineages=whole_lineages)
+        where, params = self._prune_where(
+            older_than_days, source, filters, whole_lineages=whole_lineages, include_open=include_open)
         return [dict(row) for row in self._read_all(
             f"""SELECT s.id, s.source, s.title, s.model, s.started_at,
                            {_LAST_ACTIVE_SQL} AS last_active,

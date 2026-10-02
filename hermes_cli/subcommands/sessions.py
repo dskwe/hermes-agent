@@ -125,6 +125,9 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     _add_session_filter_args(
         sessions_archive, "Only archive sessions older than AGE (duration like '5h'/'2d', "
         "bare number of days, or ISO timestamp)")
+    sessions_archive.add_argument("--session-id", help="Archive one session by ID or unique prefix")
+    _flag(sessions_archive, "--include-open",
+        help="Allow archiving sessions whose turn is still open (required for live sessions)")
 
     sessions_optimize = sessions_subparsers.add_parser(
         "optimize", help="Reclaim disk space: merge FTS5 segments + VACUUM (no data change)")

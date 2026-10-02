@@ -673,6 +673,18 @@ def _cmd_prune_or_archive(db, args, action):
     if prune and getattr(args, "never_active", False):
         return _prune_never_active_keyed(db, args)
     from hermes_cli.session_filters import build_prune_filters, describe_filters, format_epoch
+    if not prune and getattr(args, "session_id", None):
+        resolved = db.resolve_session_id(args.session_id)
+        if not resolved:
+            return _not_found(args.session_id)
+        session = db.get_session(resolved) or {}
+        if session.get("ended_at") is None and not getattr(args, "include_open", False):
+            print("Cannot archive an open session without --include-open.")
+            return 1
+        if not db.set_session_archived(resolved, True):
+            return _not_found(args.session_id)
+        print(f"Archived session '{resolved}'. It's hidden from listings but fully recoverable (nothing was deleted).")
+        return
     # Bare `prune` keeps the historical "older than 90 days" default. ANY filter — including --source —
     # suppresses the implicit cutoff (`prune --source cron` matches ALL cron sessions); the preview +
     # confirmation below is the safety net.
@@ -697,7 +709,9 @@ def _cmd_prune_or_archive(db, args, action):
     if not filters["include_pinned"]:
         _note_pinned_skipped(db, filters, action)
     # Prune deletes a compression lineage only as a unit; the preview must list the rows it deletes.
-    candidates = db.list_prune_candidates(**filters, whole_lineages=prune)
+    candidates = db.list_prune_candidates(
+        **filters, whole_lineages=prune,
+        include_open=(not prune and getattr(args, "include_open", False)))
     # Archive expands each matched tip to its compression lineage, so a direct-open count would
     # misdescribe its effect.
     skipped_open = db.count_open_prune_matches(**filters) if prune else 0
@@ -733,7 +747,7 @@ def _cmd_prune_or_archive(db, args, action):
     if prune:
         print(f"Pruned {db.prune_sessions(sessions_dir=_sessions_dir(), exclude_active_write_guards=True, **filters)} session(s).")
     else:
-        print(f"Archived {db.archive_sessions(**filters)} session(s). They're hidden from listings "
+        print(f"Archived {db.archive_sessions(**filters, include_open=getattr(args, 'include_open', False))} session(s). They're hidden from listings "
               "but fully recoverable (nothing was deleted).")
 
 
