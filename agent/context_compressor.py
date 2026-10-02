@@ -1669,7 +1669,7 @@ def _sum_terminal(name, args, content, content_len, line_count):
 
 def _sum_write_file(name, args, content, content_len, line_count):
     written_lines = _str_arg(args, "content").count("\n") + 1 if args.get("content") else "?"
-    return f"[write_file] wrote to {args.get('path', '?')} ({written_lines} lines)"
+    return f"[write_file] wrote to {args.get('path', '?')} ({written_lines} lines){_tool_result_failure_suffix(content)}"
 
 
 def _sum_search_files(name, args, content, content_len, line_count):
@@ -1853,7 +1853,7 @@ def _sum_skills_list(name, args, content, content_len, line_count):
     return f"[skills_list]{scope}{listed}{_skill_result_failure_suffix(content)} ({content_len:,} chars)"
 
 
-def _skill_result_failure_suffix(content: str) -> str:
+def _tool_result_failure_suffix(content: str) -> str:
     """`` FAILED: <error>`` for a skill-tool payload that reports failure, else ``""``.
     The skill tools return ``{"success": false, "error": ...}``; without the outcome in the stub a
     failed batch compresses into the same line as a success and the post-compaction agent chases the
@@ -1866,11 +1866,14 @@ def _skill_result_failure_suffix(content: str) -> str:
     return f" FAILED: {preview}" if preview else " FAILED"
 
 
+_skill_result_failure_suffix = _tool_result_failure_suffix
+
+
 def _sum_template(template: str, **defaults):
     """Summarizer formatting ``template`` from the parsed args (``defaults`` fill missing keys) plus ``content_len``."""
     return lambda name, args, content, content_len, line_count: template.format_map(
         {**defaults, **args, "content_len": content_len}
-    )
+    ) + _tool_result_failure_suffix(content)
 
 
 # tool_name -> (name, args, content, content_len, line_count) -> one-line summary.

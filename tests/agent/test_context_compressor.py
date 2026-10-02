@@ -3693,3 +3693,35 @@ class TestSanitizeToolPairsWhitespace:
         tool_call_ids = [m.get("tool_call_id") for m in out if m.get("role") == "tool"]
         assert "call_orphan" not in tool_call_ids, "genuinely orphaned result must be removed"
         assert " call_orphan " not in tool_call_ids, "original whitespace form must also be gone"
+
+
+class TestMutationToolResultSummaries:
+    def test_refused_write_file_summary_preserves_failure(self):
+        from agent.context_compressor import _summarize_tool_result
+
+        result = _summarize_tool_result(
+            "write_file",
+            '{"path":"ledger.md","content":"new entry\n"}',
+            '{"error":"Refusing to overwrite ledger.md: stale content", "stale_write_blocked":true}',
+        )
+
+        assert "wrote to" in result
+        assert "FAILED: Refusing to overwrite ledger.md: stale content" in result
+
+    def test_rejected_patch_summary_preserves_failure(self):
+        from agent.context_compressor import _summarize_tool_result
+
+        result = _summarize_tool_result(
+            "patch",
+            '{"path":"ledger.md","patch":"old"}',
+            '{"success":false,"error":"exact match not found"}',
+        )
+
+        assert "FAILED: exact match not found" in result
+
+    def test_successful_mutation_summary_remains_successful(self):
+        from agent.context_compressor import _summarize_tool_result
+
+        assert "FAILED" not in _summarize_tool_result(
+            "write_file", '{"path":"ledger.md","content":"ok"}', '{"success":true}'
+        )
