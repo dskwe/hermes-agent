@@ -276,10 +276,15 @@ def build_service(api, version):
 
 
 def gmail_search(args):
+    page_token = getattr(args, "page_token", "")
+    with_pagination = getattr(args, "with_pagination", False)
+
     if _gws_binary():
+        params = {"userId": "me", "q": args.query, "maxResults": args.max}
+        if page_token:
+            params["pageToken"] = page_token
         results = _run_gws(
-            ["gmail", "users", "messages", "list"],
-            params={"userId": "me", "q": args.query, "maxResults": args.max},
+            ["gmail", "users", "messages", "list"], params=params
         )
         messages = results.get("messages", [])
         output = []
@@ -306,35 +311,36 @@ def gmail_search(args):
                     "labels": msg.get("labelIds", []),
                 }
             )
-        print(json.dumps(output, indent=2, ensure_ascii=False))
-        return
+    else:
+        service = build_service("gmail", "v1")
+        params = {"userId": "me", "q": args.query, "maxResults": args.max}
+        if page_token:
+            params["pageToken"] = page_token
+        results = service.users().messages().list(**params).execute()
+        output = []
+        for msg_meta in results.get("messages", []):
+            msg = service.users().messages().get(
+                userId="me", id=msg_meta["id"], format="metadata",
+                metadataHeaders=["From", "To", "Subject", "Date"],
+            ).execute()
+            headers = _headers_dict(msg)
+            output.append({
+                "id": msg["id"],
+                "threadId": msg["threadId"],
+                "from": headers.get("from", ""),
+                "to": headers.get("to", ""),
+                "subject": headers.get("subject", ""),
+                "date": headers.get("date", ""),
+                "snippet": msg.get("snippet", ""),
+                "labels": msg.get("labelIds", []),
+            })
 
-    service = build_service("gmail", "v1")
-    results = service.users().messages().list(
-        userId="me", q=args.query, maxResults=args.max
-    ).execute()
-    messages = results.get("messages", [])
-    if not messages:
-        print("No messages found.")
-        return
-
-    output = []
-    for msg_meta in messages:
-        msg = service.users().messages().get(
-            userId="me", id=msg_meta["id"], format="metadata",
-            metadataHeaders=["From", "To", "Subject", "Date"],
-        ).execute()
-        headers = _headers_dict(msg)
-        output.append({
-            "id": msg["id"],
-            "threadId": msg["threadId"],
-            "from": headers.get("from", ""),
-            "to": headers.get("to", ""),
-            "subject": headers.get("subject", ""),
-            "date": headers.get("date", ""),
-            "snippet": msg.get("snippet", ""),
-            "labels": msg.get("labelIds", []),
-        })
+    if with_pagination:
+        output = {
+            "results": output,
+            "nextPageToken": results.get("nextPageToken"),
+            "complete": not bool(results.get("nextPageToken")),
+        }
     print(json.dumps(output, indent=2, ensure_ascii=False))
 
 
@@ -529,39 +535,25 @@ def calendar_list(args):
     now = datetime.now(timezone.utc)
     time_min = _datetime_with_timezone(args.start or now.isoformat())
     time_max = _datetime_with_timezone(args.end or (now + timedelta(days=7)).isoformat())
+    page_token = getattr(args, "page_token", "")
+    with_pagination = getattr(args, "with_pagination", False)
+
+    params = {
+        "calendarId": args.calendar,
+        "timeMin": time_min,
+        "timeMax": time_max,
+        "maxResults": args.max,
+        "singleEvents": True,
+        "orderBy": "startTime",
+    }
+    if page_token:
+        params["pageToken"] = page_token
 
     if _gws_binary():
-        results = _run_gws(
-            ["calendar", "events", "list"],
-            params={
-                "calendarId": args.calendar,
-                "timeMin": time_min,
-                "timeMax": time_max,
-                "maxResults": args.max,
-                "singleEvents": True,
-                "orderBy": "startTime",
-            },
-        )
-        events = []
-        for e in results.get("items", []):
-            events.append({
-                "id": e["id"],
-                "summary": e.get("summary", "(no title)"),
-                "start": e.get("start", {}).get("dateTime", e.get("start", {}).get("date", "")),
-                "end": e.get("end", {}).get("dateTime", e.get("end", {}).get("date", "")),
-                "location": e.get("location", ""),
-                "description": e.get("description", ""),
-                "status": e.get("status", ""),
-                "htmlLink": e.get("htmlLink", ""),
-            })
-        print(json.dumps(events, indent=2, ensure_ascii=False))
-        return
-
-    service = build_service("calendar", "v3")
-    results = service.events().list(
-        calendarId=args.calendar, timeMin=time_min, timeMax=time_max,
-        maxResults=args.max, singleEvents=True, orderBy="startTime",
-    ).execute()
+        results = _run_gws(["calendar", "events", "list"], params=params)
+    else:
+        service = build_service("calendar", "v3")
+        results = service.events().list(**params).execute()
 
     events = []
     for e in results.get("items", []):
@@ -575,6 +567,12 @@ def calendar_list(args):
             "status": e.get("status", ""),
             "htmlLink": e.get("htmlLink", ""),
         })
+    if with_pagination:
+        events = {
+            "results": events,
+            "nextPageToken": results.get("nextPageToken"),
+            "complete": not bool(results.get("nextPageToken")),
+        }
     print(json.dumps(events, indent=2, ensure_ascii=False))
 
 
@@ -1158,6 +1156,8 @@ def main():
     p = gmail_sub.add_parser("search")
     p.add_argument("query", help="Gmail search query (e.g. 'is:unread')")
     p.add_argument("--max", type=int, default=10)
+    p.add_argument("--page-token", default="", help="Continuation token from a previous search")
+    p.add_argument("--with-pagination", action="store_true", help="Include nextPageToken and complete metadata")
     p.set_defaults(func=gmail_search)
 
     p = gmail_sub.add_parser("get")
@@ -1198,6 +1198,8 @@ def main():
     p.add_argument("--end", default="", help="End time (ISO 8601)")
     p.add_argument("--max", type=int, default=25)
     p.add_argument("--calendar", default="primary")
+    p.add_argument("--page-token", default="", help="Continuation token from a previous listing")
+    p.add_argument("--with-pagination", action="store_true", help="Include nextPageToken and complete metadata")
     p.set_defaults(func=calendar_list)
 
     p = cal_sub.add_parser("create")

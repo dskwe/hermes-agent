@@ -183,6 +183,8 @@ GAPI="python ${HERMES_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/
 ```bash
 # Search (returns JSON array with id, from, subject, date, snippet)
 $GAPI gmail search "is:unread" --max 10
+$GAPI gmail search "is:unread" --with-pagination
+$GAPI gmail search "is:unread" --page-token NEXT_PAGE_TOKEN --with-pagination
 $GAPI gmail search "from:boss@company.com newer_than:1d"
 $GAPI gmail search "has:attachment filename:pdf newer_than:7d"
 
@@ -210,6 +212,8 @@ $GAPI gmail modify MESSAGE_ID --remove-labels UNREAD
 # List events (defaults to next 7 days)
 $GAPI calendar list
 $GAPI calendar list --start 2026-03-01T00:00:00Z --end 2026-03-07T23:59:59Z
+$GAPI calendar list --with-pagination
+$GAPI calendar list --page-token NEXT_PAGE_TOKEN --with-pagination
 
 # Create event (ISO 8601 with timezone required)
 $GAPI calendar create --summary "Team Standup" --start 2026-03-01T10:00:00-06:00 --end 2026-03-01T10:30:00-06:00
@@ -296,7 +300,11 @@ $GAPI docs append DOC_ID --tab TAB_ID --text "..."   # --tab required when the D
 
 ## Output Format
 
-All commands return JSON. Parse with `jq` or read directly. Key fields:
+All commands return JSON. Parse with `jq` or read directly. Gmail search and Calendar list
+return their historical JSON arrays by default. Pass `--with-pagination` to receive an
+object with `results`, `nextPageToken`, and `complete`; pass that token back with
+`--page-token` to continue the same query or calendar range. `complete` is false when
+another page is available. Key fields:
 
 - **Gmail search**: `[{id, threadId, from, to, subject, date, snippet, labels}]`
 - **Gmail get**: `{id, threadId, from, to, subject, date, labels, body}`
