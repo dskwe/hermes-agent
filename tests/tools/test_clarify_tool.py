@@ -92,6 +92,12 @@ class TestClarifySchema:
         assert params["required"] == ["questions"]
         assert params["properties"]["questions"]["maxItems"] == MAX_QUESTIONS
 
+    def test_schema_does_not_emit_large_choice_length_constraint(self):
+        """Runtime validation keeps the limit without breaking local grammar converters."""
+        params = CLARIFY_SCHEMA["parameters"]
+        choices = params["properties"]["questions"]["items"]["properties"]["choices"]
+        assert choices["items"] == {"type": "string"}
+
 
 class TestClarifyToolMultiSelect:
     """Tests for multi_select (checkbox) support added to clarify_tool."""

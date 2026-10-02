@@ -169,7 +169,7 @@ CLARIFY_SCHEMA = {
                         "question": {"type": "string"},
                         "choices": {
                             "type": "array",
-                            "items": {"type": "string", "maxLength": MAX_CHOICE_CHARS},
+                            "items": {"type": "string"},
                             "maxItems": MAX_CHOICES,
                         },
                         "multi_select": {"type": "boolean"},
