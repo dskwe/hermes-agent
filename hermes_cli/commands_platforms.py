@@ -230,6 +230,14 @@ def _iter_gateway_skills(platform: str):
         yield cmd_key, info, sp.parent.relative_to(root).parts
 
 
+def _iter_gateway_bundles():
+    """Yield bundle commands in the same ``(cmd_key, info, rel_parts)`` shape as skills."""
+    from agent.skill_bundles import get_skill_bundles
+
+    for cmd_key, info in sorted(get_skill_bundles().items()):
+        yield cmd_key, info, ()
+
+
 def _collect_gateway_skill_entries(
     platform: str, max_slots: int | None, reserved_names: set[str], desc_limit: int = 100,
     sanitize_name: "Callable[[str], str] | None" = None,
@@ -268,15 +276,19 @@ def _collect_gateway_skill_entries(
 
     plugin_entries = _entries(_plugin_rows())
     reserved_names.update(n for n, *_rest in plugin_entries)
+    bundle_entries = _entries(
+        (cmd_key.lstrip("/"), info.get("description", ""), cmd_key)
+        for cmd_key, info, _rel in _iter_gateway_bundles())
+    reserved_names.update(n for n, *_rest in bundle_entries)
     skill_entries = _entries(
         (cmd_key.lstrip("/"), info.get("description", ""), cmd_key)
         for cmd_key, info, _rel in _iter_gateway_skills(platform))
 
     if max_slots is None:
-        return plugin_entries + skill_entries, 0
-    remaining = max(0, max_slots - len(plugin_entries))
+        return plugin_entries + bundle_entries + skill_entries, 0
+    remaining = max(0, max_slots - len(plugin_entries) - len(bundle_entries))
     hidden_count = max(0, len(skill_entries) - remaining)
-    return (plugin_entries + skill_entries[:remaining])[:max_slots], hidden_count
+    return (plugin_entries + bundle_entries + skill_entries[:remaining])[:max_slots], hidden_count
 
 
 def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str]], int]:
@@ -329,8 +341,9 @@ def discord_skill_commands_by_category(
     names_used: dict[str, str] = dict.fromkeys(reserved_names, "<reserved>")
     hidden = 0
     try:
-        for cmd_key, info, rel_parts in _iter_gateway_skills("discord"):
-            # First (alphabetical) skill wins; the loser is dropped from the picker — warn loudly.
+        for cmd_key, info, rel_parts in (*_iter_gateway_bundles(), *_iter_gateway_skills("discord")):
+            # First (alphabetical) command wins; bundles precede skills so dispatch's
+            # bundle-over-skill precedence is reflected in the autocomplete catalog.
             discord_name = cmd_key.lstrip("/")[:32]
             prior = names_used.get(discord_name)
             if prior == "<reserved>":
