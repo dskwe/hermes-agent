@@ -1,5 +1,6 @@
 """Backup and import commands for hermes CLI."""
 
+import errno
 import json
 import logging
 import os
@@ -292,8 +293,12 @@ def _is_non_regular_path(path: Path) -> bool:
     """
     try:
         return not stat.S_ISREG(path.lstat().st_mode)
-    except OSError:
-        return False
+    except OSError as exc:
+        # Some mounted filesystems (notably virtiofs) report unsupported
+        # metadata operations for sockets and other special entries. Keep
+        # those out of the archive, while preserving the existing behavior
+        # for ordinary permission/read failures.
+        return exc.errno in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}
 
 
 def _is_link_path(path: Path) -> bool:
