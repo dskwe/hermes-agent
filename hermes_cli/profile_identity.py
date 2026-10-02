@@ -136,6 +136,32 @@ def _purge_profile_identity(canon: str, live_mux: bool) -> bool:
             if db is not None:
                 with contextlib.suppress(Exception):
                     release_or_close(db)
+
+    # The stopped-gateway path has no live SessionStore to rewrite the legacy mirror. Re-open a
+    # short-lived store after the SQLite purge so its normal snapshot writer drops the same namespace
+    # from sessions.json as well as any routing rows that survived the DB pass.
+    sessions_dir = root / "sessions"
+    if sessions_dir.exists():
+        store = None
+        try:
+            from gateway.config import GatewayConfig
+            from gateway.session import SessionStore
+            store = SessionStore(
+                sessions_dir,
+                GatewayConfig(sessions_dir=sessions_dir, write_sessions_json=True,
+                              multiplex_profiles=True),
+            )
+            store.purge_profile_routing(canon)
+        except Exception as exc:
+            purged = False
+            print(
+                f"⚠ Profile was deleted, but sessions.json identity purge failed for {sessions_dir}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr)
+        finally:
+            if store is not None:
+                with contextlib.suppress(Exception):
+                    store.close_all_db_handles()
     return purged
 
 
