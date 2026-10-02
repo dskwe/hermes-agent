@@ -1182,11 +1182,13 @@ def _run_prompt_submit(
         except Exception as e:
             _recover_turn_exception(sid, session, st, e)
         finally:
-            _finish_turn(sid, session, st)
             _current_runtime_session_record.reset(runtime_session_token)
             reset_transport(transport_token)
             # A stale interim closure must not fire during a later turn.
             st.agent.interim_assistant_callback = None
+            # Release the session and publish the completion bookend before any best-effort
+            # post-turn work. A blocked memory trim, TTS queue, or runtime restore must not
+            # leave the Desktop session permanently busy (#131740).
             with session["history_lock"]:
                 session["running"] = False
                 session["last_active"] = time.time()
@@ -1206,6 +1208,10 @@ def _run_prompt_submit(
                 sid, session.get("session_key") or "", getattr(st.agent, "session_id", "") or "",
                 status, st.error_retained, time.monotonic() - _turn_started_monotonic,
                 st.error_detail)
+            try:
+                _finish_turn(sid, session, st)
+            except Exception:
+                logger.debug("post-turn finalization failed", exc_info=True)
             # Backstop for turns that never reached a terminal frame.
             if st.receipt_committed:
                 _retire_turn_marker(session, st.marker_key)
