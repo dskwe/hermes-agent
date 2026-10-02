@@ -1555,6 +1555,18 @@ class GatewayNotificationsMixin:
         from gateway.run import _async_profile_runtime_scope
         from hermes_constants import get_hermes_home_override
         source = self._build_process_event_source(evt)
+        if source is None:
+            # Raw api_server session keys carry no profile in the event. In multiplex mode,
+            # ownership is established by the secondary profile's own state.db; bind that
+            # profile before the pre-flight and durable-ledger reads.
+            raw_sid = _raw_process_event_session_id(evt)
+            if raw_sid:
+                served = self._served_api_server_wake_profile(evt, raw_sid)
+                if served:
+                    from gateway.run import _async_profile_runtime_scope, _multiplex_profile_homes
+                    profile_home = dict(_multiplex_profile_homes(self.config)).get(served)
+                    if profile_home is not None:
+                        return _async_profile_runtime_scope(profile_home)
         if source is None or not getattr(source, "profile", None):
             # No routed profile: the launch profile's own completion. Bind ITS scope once the
             # process multiplexes — unscoped, a fail-closed ledger read raises on a legitimate
