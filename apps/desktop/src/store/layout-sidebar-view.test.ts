@@ -92,11 +92,12 @@ describe('the sidebar as it ships', () => {
     expect($sidebarGrouping.get()).toBe('profile')
   })
 
-  it('visits every grouping once per lap and comes back to where it started', () => {
+  it('cycles flat groupings without entering project scope', () => {
     const start = $sidebarGrouping.get()
     const visited: SidebarGrouping[] = []
+    const cycleOrder = SIDEBAR_GROUPING_ORDER.filter(grouping => grouping !== 'project')
 
-    for (let step = 0; step < SIDEBAR_GROUPING_ORDER.length; step++) {
+    for (let step = 0; step < cycleOrder.length; step++) {
       cycleSidebarGrouping()
       visited.push($sidebarGrouping.get())
 
@@ -105,7 +106,8 @@ describe('the sidebar as it ships', () => {
       }
     }
 
-    expect(new Set(visited)).toEqual(new Set(SIDEBAR_GROUPING_ORDER))
+    expect(new Set(visited)).toEqual(new Set(cycleOrder))
+    expect(visited).not.toContain('project')
     expect($sidebarGrouping.get()).toBe(start)
   })
 })

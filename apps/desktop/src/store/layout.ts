@@ -864,9 +864,13 @@ export function setSidebarGrouping(grouping: SidebarGrouping) {
 }
 
 export function cycleSidebarGrouping() {
-  const currentIndex = SIDEBAR_GROUPING_ORDER.indexOf($sidebarGrouping.get())
+  // Project grouping is entered through the project scope, not the flat
+  // grouping atom. Do not offer it as a cycle target or the atom rejects it
+  // and immediately falls back to date.
+  const cycleOrder = SIDEBAR_GROUPING_ORDER.filter(grouping => grouping !== 'project')
+  const currentIndex = cycleOrder.indexOf($sidebarGrouping.get())
 
-  setSidebarGrouping(SIDEBAR_GROUPING_ORDER[(currentIndex + 1) % SIDEBAR_GROUPING_ORDER.length])
+  setSidebarGrouping(cycleOrder[(currentIndex + 1) % cycleOrder.length])
 }
 
 export function setSidebarOrdering(ordering: SidebarOrdering) {
