@@ -664,6 +664,8 @@ exclude-newer = "14 days"
 # firecrawl-anydoc: same exact-pin shape (==0.2.4, hosted-OCR wiring PR).
 # The pin bump WAS the review; exclude-newer adds zero float protection to
 # an exact pin and would only delay the reviewed version 14 days.
+# pilk: same exact-pin shape (==0.2.4, silk extra). Mirrors that omit
+# upload-time metadata otherwise make this reviewed pin appear unavailable.
 #
 # Every other exact-pinned package below: the release-day brick shape
 # (observed 2026-08-29 updating three long-running installs v0.20.0 ->
@@ -750,6 +752,7 @@ packaging = false
 parallel-web = false
 pathspec = false
 pillow = false
+pilk = false
 piper-tts = "2026-09-04T16:47:32Z"
 prompt-toolkit = false
 psutil = false
