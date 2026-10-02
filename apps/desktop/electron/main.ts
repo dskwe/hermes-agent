@@ -12712,6 +12712,7 @@ async function prepareProfileRenameRequest(request) {
 // Escape hatch: a dedicated, private backend for this app instead of the host's.
 const ISOLATED_BACKEND = process.env.HERMES_DESKTOP_ISOLATED_BACKEND === '1'
 const ATTACHED_LIVENESS_POLL_MS = 15_000
+const ATTACHED_LIVENESS_FAILURES_BEFORE_RECOVERY = 2
 let attachedBackendMonitor: NodeJS.Timeout | null = null
 let hostSpawnReservation: SpawnReservation | null = null
 
@@ -12743,6 +12744,7 @@ function stopAttachedBackendMonitor() {
  */
 function startAttachedBackendMonitor(attached: AttachedBackend) {
   stopAttachedBackendMonitor()
+  let consecutiveFailures = 0
 
   attachedBackendMonitor = setInterval(() => {
     void waitForHermes(attached.baseUrl, attached.token, undefined, 'token', {})
@@ -12751,8 +12753,17 @@ function startAttachedBackendMonitor(attached: AttachedBackend) {
         if (isAttachedBackendTokenDrifted({ servedToken, adoptedToken: attached.token })) {
           throw new Error('attached backend is serving a different session token')
         }
+        consecutiveFailures = 0
       })
       .catch(() => {
+        consecutiveFailures += 1
+        if (consecutiveFailures < ATTACHED_LIVENESS_FAILURES_BEFORE_RECOVERY) {
+          rememberLog(
+            `[attach] attached backend on ${attached.baseUrl} is temporarily unavailable ` +
+              `(probe ${consecutiveFailures}/${ATTACHED_LIVENESS_FAILURES_BEFORE_RECOVERY}); retrying`
+          )
+          return
+        }
         stopAttachedBackendMonitor()
         rememberLog(`[attach] attached backend on ${attached.baseUrl} (pid ${attached.pid}) is gone; recovering`)
         backendConnectionState.invalidate()
