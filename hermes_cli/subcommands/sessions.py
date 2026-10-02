@@ -92,6 +92,10 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
         "bare number of days, or an ISO timestamp)")
     _flag(sessions_export, "--redact",
         help="Redact secrets (API keys, tokens, credentials) from exported content")
+    _flag(sessions_export, "--include-archived",
+        help="Also export archived sessions (excluded by default when filters are used)")
+    _flag(sessions_export, "--include-pinned",
+        help="Also export pinned sessions (excluded by default when filters are used)")
     sessions_export.add_argument("--lineage", choices=["single", "logical"], default="single",
         help="md/qmd only: export one row or its compression lineage")
     _flag(sessions_export, "--delete-after-verified",

@@ -328,8 +328,10 @@ def _cmd_export(db, args):
         except ValueError as e:
             print(f"Error: {e}")
             return
-        # Unlike prune/archive, export includes archived sessions.
-        filters["archived"] = None
+        # Match prune's retention safety defaults: archived and pinned sessions are
+        # excluded unless the caller explicitly opts into exporting them.
+        filters["archived"] = None if args.include_archived else False
+        filters["include_pinned"] = args.include_pinned
 
     def _redact(data):
         if not args.redact or data is None:

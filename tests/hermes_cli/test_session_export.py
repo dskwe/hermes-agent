@@ -135,3 +135,32 @@ def test_sessions_export_cli_prompt_only_stdout(monkeypatch, capsys):
     }
 
 
+def test_sessions_export_filter_defaults_skip_archived_and_pinned(monkeypatch, tmp_path):
+    import argparse
+    import hermes_cli.sessions_cmd as sessions_cmd
+
+    captured = {}
+
+    class FakeDB:
+        def list_prune_candidates(self, **filters):
+            captured["filters"] = filters
+            return []
+
+    monkeypatch.setattr(
+        sessions_cmd, "_any_filter_args", lambda _args: True,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.session_filters.build_prune_filters",
+        lambda _args: {},
+    )
+
+    args = argparse.Namespace(
+        format="jsonl", output=str(tmp_path / "sessions.jsonl"), session_id=None,
+        source=None, redact=False, only=None, dry_run=False,
+        include_archived=False, include_pinned=False,
+    )
+    sessions_cmd._cmd_export(FakeDB(), args)
+
+    assert captured["filters"] == {"archived": False, "include_pinned": False}
+
+
