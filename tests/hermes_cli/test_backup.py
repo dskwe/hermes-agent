@@ -1,5 +1,6 @@
 """Tests for hermes backup and import commands."""
 
+import errno
 import json
 import os
 import socket
@@ -306,6 +307,20 @@ class TestIterBackupFiles:
         list(_iter_backup_files(root, tmp_path / "out.zip", skipped))
         assert "models" in skipped
         assert "hermes-agent" in skipped
+
+    def test_unsupported_lstat_is_non_regular(self):
+        from hermes_cli import backup as backup_mod
+
+        path = Path("gateway.sock")
+        with patch.object(Path, "lstat", side_effect=OSError(errno.ENOTSUP, "unsupported")):
+            assert backup_mod._is_non_regular_path(path)
+
+    def test_failed_lstat_for_regular_file_remains_archivable(self):
+        from hermes_cli import backup as backup_mod
+
+        path = Path("config.yaml")
+        with patch.object(Path, "lstat", side_effect=PermissionError(errno.EACCES, "denied")):
+            assert not backup_mod._is_non_regular_path(path)
 
     @pytest.mark.platforms("linux")
     def test_skips_unix_sockets(self, tmp_path, monkeypatch):

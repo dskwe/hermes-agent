@@ -1,5 +1,6 @@
 """Backup and import commands for hermes CLI."""
 
+import errno
 import json
 import logging
 import os
@@ -287,13 +288,18 @@ def _iter_external_files(base: Path) -> List[Path]:
 def _is_non_regular_path(path: Path) -> bool:
     """True for symlinks, sockets, devices, and other non-regular filesystem entries.
 
-    A failed ``lstat`` is not treated as an exclusion: the archive writer must see the path and
-    report the read failure instead of silently claiming a complete backup.
+    A failed ``lstat`` is normally not treated as an exclusion so the archive writer can report
+    the read failure. Filesystems that report unsupported metadata operations are excluded because
+    they cannot be archived as regular files.
     """
     try:
         return not stat.S_ISREG(path.lstat().st_mode)
-    except OSError:
-        return False
+    except OSError as exc:
+        # Some mounted filesystems (notably virtiofs) report unsupported
+        # metadata operations for sockets and other special entries.  Keep
+        # those out of the archive, while preserving the existing behavior
+        # for ordinary permission/read failures.
+        return exc.errno in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}
 
 
 def _is_link_path(path: Path) -> bool:
