@@ -294,7 +294,7 @@ function SearchResultsList({ hits }: { hits: SearchResultRow[] }) {
 }
 
 function LinkifiedText({ className, text }: { className?: string; text: string }) {
-  return <SharedLinkifiedText className={className} pretty text={cleanVisibleText(text)} />
+  return <SharedLinkifiedText className={className} explicitOnly pretty text={cleanVisibleText(text)} />
 }
 
 function ToolTitle({
