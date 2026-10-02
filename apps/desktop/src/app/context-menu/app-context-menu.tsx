@@ -156,25 +156,33 @@ function domSections(open: Extract<OpenContextMenu, { kind: 'dom' }>, t: Transla
   // (the edit composer re-parents focus on blur) it selected the whole
   // transcript. A renderer range cannot escape the field.
   const selectAllInEditable = () => {
-    withEditableFocus(() => {
-      const editable = target.editable
+    const editable = target.editable
 
-      if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
-        editable.select()
+    closeContextMenu()
+    requestAnimationFrame(() => {
+      editable?.focus()
 
-        return
-      }
+      // The composer restores its caret from its focus state after the first
+      // frame. Select after that restoration so its focus handler cannot
+      // collapse the range we just applied.
+      requestAnimationFrame(() => {
+        if (editable instanceof HTMLInputElement || editable instanceof HTMLTextAreaElement) {
+          editable.select()
 
-      if (editable) {
-        const range = document.createRange()
+          return
+        }
 
-        range.selectNodeContents(editable)
+        if (editable) {
+          const range = document.createRange()
 
-        const selection = window.getSelection()
+          range.selectNodeContents(editable)
 
-        selection?.removeAllRanges()
-        selection?.addRange(range)
-      }
+          const selection = window.getSelection()
+
+          selection?.removeAllRanges()
+          selection?.addRange(range)
+        }
+      })
     })
   }
 
