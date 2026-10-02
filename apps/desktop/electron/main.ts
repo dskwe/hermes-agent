@@ -857,10 +857,12 @@ const NVIDIA_DRIVER_VERSION = parseNvidiaDriverVersion(NVIDIA_PROC_VERSION)
 let nvidiaEglFallbackActive = false
 let nvidiaEglRelaunchAttempted = false
 
+const NVIDIA_EGL_FALLBACK_MARKER = readNvidiaEglMarker(app.getPath('userData'))
+
 const NVIDIA_EGL_FALLBACK = decideNvidiaEglFallback({
   driverMajor: NVIDIA_DRIVER_MAJOR,
   driverVersion: NVIDIA_DRIVER_VERSION,
-  marker: readNvidiaEglMarker(app.getPath('userData')),
+  marker: NVIDIA_EGL_FALLBACK_MARKER,
   appVersion: app.getVersion(),
   env: process.env,
   platform: process.platform,

@@ -89,6 +89,23 @@ describe('decideNvidiaEglFallback — behavioral probe', () => {
     expect(decision.nextMarker.state).toBe('booting')
   })
 
+  it('re-probes a matching fallback after the witness expiry window', () => {
+    const now = 10 * 86400000
+    const marker = { ...nvidiaEglFallbackMarker('0.21.5', '580.178.04'), since: now - 7 * 86400000 }
+    const decision = decideNvidiaEglFallback({ ...PROBE, marker, now })
+
+    expect(decision.enable).toBe(false)
+    expect(decision.reason).toContain('expired')
+    expect(decision.nextMarker.state).toBe('booting')
+  })
+
+  it('supports disabling the expiry with a zero-day setting', () => {
+    const marker = { ...nvidiaEglFallbackMarker('0.21.5', '580.178.04'), since: 0 }
+    const decision = decideNvidiaEglFallback({ ...PROBE, marker, now: 100 * 86400000, env: { HERMES_DESKTOP_NVIDIA_SWIFTSHADER_REPROBE_DAYS: '0' } })
+
+    expect(decision.enable).toBe(true)
+  })
+
   it('a driver update re-probes hardware GL once', () => {
     const marker = nvidiaEglFallbackMarker('0.21.5', '580.178.04')
     const decision = decideNvidiaEglFallback({ ...PROBE, marker, driverVersion: '580.182.10' })
@@ -220,9 +237,10 @@ describe('marker persistence', () => {
     expect(
       nvidiaEglMarkerAfterSuccessfulBoot({
         fallbackActive: true,
+        since: 123,
         appVersion: '0.21.5',
         driverVersion: '580.178.04'
       })
-    ).toEqual(nvidiaEglFallbackMarker('0.21.5', '580.178.04'))
+    ).toEqual({ state: 'fallback', version: '0.21.5', driverVersion: '580.178.04', since: 123 })
   })
 })

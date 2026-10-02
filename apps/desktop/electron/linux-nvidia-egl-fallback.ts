@@ -63,6 +63,8 @@ export interface NvidiaEglMarker {
   version?: string
   /** Full driver version (e.g. "580.178.04") the fallback was witnessed on. */
   driverVersion?: string
+  /** Unix milliseconds when the GPU death was witnessed. */
+  since?: number
 }
 
 export function nvidiaEglMarkerPath(userDataDir: string): string {
@@ -89,6 +91,10 @@ export function parseNvidiaEglMarker(raw: unknown): NvidiaEglMarker | null {
 
   if (typeof record.driverVersion === 'string' && record.driverVersion) {
     marker.driverVersion = record.driverVersion
+  }
+
+  if (typeof record.since === 'number' && Number.isFinite(record.since)) {
+    marker.since = record.since
   }
 
   return marker
@@ -127,7 +133,7 @@ export function writeNvidiaEglMarker(
 }
 
 export function nvidiaEglFallbackMarker(appVersion: string, driverVersion: string): NvidiaEglMarker {
-  return { state: 'fallback', version: appVersion, driverVersion }
+  return { state: 'fallback', version: appVersion, driverVersion, since: Date.now() }
 }
 
 /**
@@ -154,6 +160,14 @@ export function parseNvidiaDriverVersion(procVersion: string): string | null {
   const match = /\b(\d{3,}\.\d+\.\d+)\b/.exec(String(procVersion || ''))
 
   return match ? match[1] : null
+}
+
+export const NVIDIA_SWIFTSHADER_REPROBE_DAYS = 7
+
+function nvidiaSwiftShaderReprobeDays(env: NodeJS.ProcessEnv): number {
+  const configured = Number(env.HERMES_DESKTOP_NVIDIA_SWIFTSHADER_REPROBE_DAYS)
+
+  return Number.isFinite(configured) && configured >= 0 ? configured : NVIDIA_SWIFTSHADER_REPROBE_DAYS
 }
 
 export interface NvidiaEglFallbackDecision {
@@ -189,6 +203,7 @@ export function decideNvidiaEglFallback(options: {
   platform?: NodeJS.Platform
   isWsl?: boolean
   remoteDisplayReason?: string | null
+  now?: number
 }): NvidiaEglFallbackDecision {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
@@ -198,6 +213,7 @@ export function decideNvidiaEglFallback(options: {
   const driverVersion = options.driverVersion ?? null
   const appVersion = options.appVersion ?? ''
   const marker = options.marker ?? null
+  const now = options.now ?? Date.now()
 
   const bootMarker: NvidiaEglMarker = { state: 'booting' }
 
@@ -245,6 +261,13 @@ export function decideNvidiaEglFallback(options: {
     marker.version === (appVersion || marker.version) &&
     marker.driverVersion === (driverVersion ?? marker.driverVersion)
   ) {
+    const reprobeDays = nvidiaSwiftShaderReprobeDays(env)
+    const expired = reprobeDays > 0 && typeof marker.since === 'number' && now - marker.since >= reprobeDays * 86400000
+
+    if (expired) {
+      return { enable: false, reason: 'witness expired; re-probing hardware GL', nextMarker: bootMarker }
+    }
+
     return {
       enable: true,
       reason: `witnessed GPU-process death (app ${marker.version ?? '?'}, driver ${marker.driverVersion ?? '?'})`,
@@ -308,9 +331,15 @@ export function nvidiaEglMarkerAfterSuccessfulBoot(options: {
   fallbackActive: boolean
   appVersion?: string
   driverVersion?: string | null
+  since?: number
 }): NvidiaEglMarker {
   if (options.fallbackActive) {
-    return nvidiaEglFallbackMarker(options.appVersion ?? '', options.driverVersion ?? '')
+    return {
+      state: 'fallback',
+      version: options.appVersion ?? '',
+      driverVersion: options.driverVersion ?? '',
+      since: options.since
+    }
   }
 
   return { state: 'ok' }
