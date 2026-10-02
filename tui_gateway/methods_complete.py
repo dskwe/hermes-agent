@@ -231,6 +231,7 @@ def _dir_listing_items(root: str, word: str, path_part: str, prefix_tag: str, is
 
 
 @method("complete.path")
+@_profile_scoped
 @_catch(5021)
 def _(rid, params: dict) -> dict:
     word = params.get("word", "")
