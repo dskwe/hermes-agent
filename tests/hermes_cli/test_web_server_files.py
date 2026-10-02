@@ -327,6 +327,19 @@ def test_stream_upload_cleans_temp_on_cancellation(forced_files_client):
     assert leftovers == [], f"temp upload files leaked on cancellation: {leftovers}"
 
 
+def test_listing_skips_entries_that_disappear_before_stat(forced_files_client):
+    client, root = forced_files_client
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "healthy.txt").write_text("available")
+    broken = root / "broken-link"
+    broken.symlink_to(root / "missing.txt")
+
+    listing = client.get("/api/files", params={"path": str(root)})
+
+    assert listing.status_code == 200
+    assert [entry["name"] for entry in listing.json()["entries"]] == ["healthy.txt"]
+
+
 def test_sensitive_env_files_hidden_from_listing(forced_files_client):
     """Regression test for #57505: .env files must not appear in directory listings."""
     client, root = forced_files_client

@@ -510,11 +510,20 @@ async def list_managed_files(request: Request, path: Optional[str] = None):
         raise HTTPException(status_code=400, detail="Path is not a directory")
 
     with _io_errors("Directory is not readable", "Could not read directory"), os.scandir(target) as scan:
-        entries = [
-            _managed_file_entry(policy, Path(entry.path))
-            for entry in scan
-            if not _is_sensitive_path(Path(entry.path))
-        ]
+        entries = []
+        for entry in scan:
+            entry_path = Path(entry.path)
+            if _is_sensitive_path(entry_path):
+                continue
+            try:
+                entries.append(_managed_file_entry(policy, entry_path))
+            except HTTPException as exc:
+                if exc.status_code != 500:
+                    raise
+                # A directory can contain a dangling link or another entry
+                # that disappears between scandir and stat.  It must not make
+                # the otherwise usable listing fail as a whole.
+                continue
 
     entries.sort(key=lambda item: (not item["is_directory"], str(item["name"]).lower()))
     locked_root = policy.locked_root
