@@ -165,7 +165,8 @@ def _require_platform(platform_id: str) -> dict[str, Any]:
 
 
 def _platform_enablement(
-    platform_id: str, entry: dict[str, Any], env_on_disk: dict[str, str], scoped: bool
+    platform_id: str, entry: dict[str, Any], env_on_disk: dict[str, str], scoped: bool,
+    gateway_config: Any = None,
 ) -> tuple[bool, bool, dict | None]:
     """(enabled, configured, home_channel). Profile-scoped: derive from the profile's
     config.yaml + .env only — load_gateway_config()'s env-override layer reads
@@ -187,7 +188,8 @@ def _platform_enablement(
     try:
         from gateway.config import Platform, load_gateway_config
 
-        gateway_config = load_gateway_config()
+        if gateway_config is None:
+            gateway_config = load_gateway_config()
         platform = Platform(platform_id)
         platform_config = gateway_config.platforms.get(platform)
         enabled = bool(platform_config and platform_config.enabled)
@@ -201,7 +203,7 @@ def _platform_enablement(
 
 def _messaging_platform_payload(
     entry: dict[str, Any], env_on_disk: dict[str, str], runtime: dict | None,
-    scoped: bool = False, profile_home: Optional[Path] = None,
+    scoped: bool = False, profile_home: Optional[Path] = None, gateway_config: Any = None,
 ) -> dict[str, Any]:
     platform_id = entry["id"]
     rt = runtime if isinstance(runtime, dict) else {}
@@ -240,7 +242,9 @@ def _messaging_platform_payload(
         for key, value in ((key, env_value(key)) for key in entry["env_vars"])
     ]
 
-    enabled, configured, home_channel = _platform_enablement(platform_id, entry, env_on_disk, scoped)
+    enabled, configured, home_channel = _platform_enablement(
+        platform_id, entry, env_on_disk, scoped, gateway_config
+    )
     if gateway_running and runtime_platform.get("mirrored_from"):
         # Served secondary: the default's shared listener already answers this platform at
         # /p/<profile>/... (enabling it locally 409s), so the secondary's own empty config
@@ -288,6 +292,11 @@ def _platform_payloads(scoped_dir: Optional[Path], entries) -> list[dict[str, An
     """Payloads for ``entries``; call inside ``_profile_scope`` (load_env honors the
     HERMES_HOME contextvar; the gateway status readers do not, hence the explicit path)."""
     env_on_disk = load_env()
+    gateway_config = None
+    if scoped_dir is None:
+        from gateway.config import load_gateway_config
+
+        gateway_config = load_gateway_config()
     runtime = read_runtime_status(path=scoped_dir / "gateway_state.json") if scoped_dir is not None else read_runtime_status()
     # A profile served by the multiplexer writes no live record of its own; its adapters live in the
     # multiplexer's record under ``<profile>:<platform>``. A leftover ``gateway_state.json`` from the
@@ -306,8 +315,10 @@ def _platform_payloads(scoped_dir: Optional[Path], entries) -> list[dict[str, An
             # ``.hermes`` (or any custom HERMES_HOME), so its flat keys never matched (#123088).
             served_name = profile_name_for_home(own_home) or "default"
             runtime = {**served[1], "platforms": profile_platforms_from_multiplexer(served[1], served_name)}
-    return [_messaging_platform_payload(entry, env_on_disk, runtime, scoped=scoped_dir is not None, profile_home=scoped_dir)
-            for entry in entries]
+    return [_messaging_platform_payload(
+        entry, env_on_disk, runtime, scoped=scoped_dir is not None,
+        profile_home=scoped_dir, gateway_config=gateway_config,
+    ) for entry in entries]
 
 
 @contextlib.contextmanager
