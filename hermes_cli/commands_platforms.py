@@ -230,6 +230,17 @@ def _iter_gateway_skills(platform: str):
         yield cmd_key, info, sp.parent.relative_to(root).parts
 
 
+def _iter_gateway_skill_bundles():
+    """Yield bundle command entries in the same shape as gateway skills."""
+    try:
+        from agent.skill_bundles import get_skill_bundles
+
+        for cmd_key, info in sorted(get_skill_bundles().items()):
+            yield cmd_key, info, ()
+    except Exception:
+        return
+
+
 def _collect_gateway_skill_entries(
     platform: str, max_slots: int | None, reserved_names: set[str], desc_limit: int = 100,
     sanitize_name: "Callable[[str], str] | None" = None,
@@ -268,9 +279,13 @@ def _collect_gateway_skill_entries(
 
     plugin_entries = _entries(_plugin_rows())
     reserved_names.update(n for n, *_rest in plugin_entries)
-    skill_entries = _entries(
+    skill_rows = (
         (cmd_key.lstrip("/"), info.get("description", ""), cmd_key)
-        for cmd_key, info, _rel in _iter_gateway_skills(platform))
+        for cmd_key, info, _rel in (
+            *_iter_gateway_skill_bundles(),
+            *_iter_gateway_skills(platform),
+        ))
+    skill_entries = _entries(skill_rows)
 
     if max_slots is None:
         return plugin_entries + skill_entries, 0
@@ -329,7 +344,10 @@ def discord_skill_commands_by_category(
     names_used: dict[str, str] = dict.fromkeys(reserved_names, "<reserved>")
     hidden = 0
     try:
-        for cmd_key, info, rel_parts in _iter_gateway_skills("discord"):
+        for cmd_key, info, rel_parts in (
+            *_iter_gateway_skill_bundles(),
+            *_iter_gateway_skills("discord"),
+        ):
             # First (alphabetical) skill wins; the loser is dropped from the picker — warn loudly.
             discord_name = cmd_key.lstrip("/")[:32]
             prior = names_used.get(discord_name)
