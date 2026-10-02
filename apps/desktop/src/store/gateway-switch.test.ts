@@ -120,6 +120,14 @@ describe('wipeSessionListsForGatewaySwitch', () => {
     expect($projectScope.get()).toBe(ALL_PROJECTS)
   })
 
+  it('preserves project scope when reconnecting the same backend', () => {
+    $projectScope.set('p_same_backend')
+
+    wipeSessionListsForGatewaySwitch({ preserveProjectScope: true })
+
+    expect($projectScope.get()).toBe('p_same_backend')
+  })
+
   it("forgets the previous backend's in-memory paging state", () => {
     const page = {
       messages: Array.from({ length: 120 }, (_, index) => ({

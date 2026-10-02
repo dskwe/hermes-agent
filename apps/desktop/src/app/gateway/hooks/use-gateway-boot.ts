@@ -772,7 +772,7 @@ export function useGatewayBoot({
         // step — the shared commit point of every connection switch. Keep this
         // inside the error boundary: lifecycle/wipe setup can throw before a
         // token is returned and must follow the normal boot-failure path.
-        switchToken = beginGatewaySwitch()
+        switchToken = beginGatewaySwitch({ preserveProjectScope: true })
         const ownsSwitch = () => !cancelled && switchToken !== null && isCurrentGatewaySwitch(switchToken)
         clearReconnectTimer()
         clearBootRetryTimer()
