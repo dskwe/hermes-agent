@@ -69,9 +69,9 @@ _WRITE_TARGET_BOUNDARY = r'(?=[\s;&|<>"\']|$)'
 # 'shutdown' log". Real ;/&/| separators are converted to newlines by the quote-aware _mark_command_starts pass;
 # keeping them here mistakes quoted data (grep '(safe|rm -rf /)') for commands.
 _CMDPOS = (
-    r'(?:^|[\n`]|\$\()' r'\s*'  # start position, optional whitespace
-    r'(?:sudo\s+(?:-[^\s]+\s+)*)?' r'(?:env\s+(?:\w+=\S*\s+)*)?'  # optional sudo with flags, env VAR=VAL pairs
-    r'(?:(?:exec|nohup|setsid|time)\s+)*' r'\s*'  # optional wrapper commands
+    r'(?:^|[\n`]|\$\()' r'[ 	]*'  # start position, optional whitespace
+    r'(?:sudo[ 	]+(?:-[^\s]+[ 	]+)*)?' r'(?:env[ 	]+(?:\w+=\S*[ 	]+)*)?'  # optional sudo with flags, env VAR=VAL pairs
+    r'(?:(?:exec|nohup|setsid|time)[ 	]+)*' r'[ 	]*'  # optional wrapper commands
 )
 
 
