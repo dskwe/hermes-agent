@@ -1,5 +1,6 @@
 """Backup and import commands for hermes CLI."""
 
+import errno
 import json
 import logging
 import os
@@ -524,6 +525,13 @@ def _write_zip_entries(
                 if track_bytes:
                     total_bytes += abs_path.stat().st_size
         except (PermissionError, OSError, ValueError) as exc:
+            if isinstance(exc, OSError) and exc.errno in {
+                errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP,
+            } and not abs_path.is_dir():
+                # Some virtiofs mounts cannot lstat Unix sockets. zipfile then reports the
+                # same unsupported-operation error while opening the entry; treat that entry
+                # as non-regular instead of making every backup incomplete.
+                continue
             on_error(rel_path, exc)
             continue
         if i % 500 == 0:
