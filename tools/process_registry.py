@@ -1314,6 +1314,10 @@ class ProcessRegistry(ProcessCheckpointMixin):
         # hang waiting for `q` — default them to cat, honoring any pager the user set.
         pty_env.setdefault("GIT_PAGER", "cat")
         pty_env.setdefault("PAGER", "cat")
+        if _IS_WINDOWS:
+            # pywinpty's agent otherwise leaves a console window visible for each PTY.
+            # Force this off even if the parent environment requested console display.
+            pty_env["WINPTY_SHOW_CONSOLE"] = "0"
         pty_proc = _PtyProcessCls.spawn(pty_argv, cwd=session.cwd, env=pty_env, dimensions=(30, 120))
         session.pid = pty_proc.pid
         session.host_start_time = self._safe_host_start_time(session.pid)
